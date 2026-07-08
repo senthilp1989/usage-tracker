@@ -1,0 +1,22 @@
+from sqlalchemy import Column, Date, DateTime, Integer, String, UniqueConstraint, func
+
+from .database import Base
+
+
+class UsageReport(Base):
+    """One row per user per day. Each incoming report overwrites today's row
+    with the latest total-so-far, since deployments only check in intermittently.
+    `reported_at` reflects the last time this row was actually written to,
+    so you can tell how stale a user's number is."""
+
+    __tablename__ = "usage_reports"
+    __table_args__ = (UniqueConstraint("user_email", "report_date", name="uq_usage_reports_user_date"),)
+
+    id = Column(Integer, primary_key=True)
+    stack_id = Column(String(255), nullable=False)
+    user_email = Column(String(255), nullable=False, index=True)
+    report_date = Column(Date, nullable=False, index=True)
+    test_cases_created = Column(Integer, nullable=False, default=0)
+    test_cases_executed = Column(Integer, nullable=False, default=0)
+    documents_generated = Column(Integer, nullable=False, default=0)
+    reported_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())

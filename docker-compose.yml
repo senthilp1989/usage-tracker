@@ -1,0 +1,56 @@
+services:
+  database:
+    image: postgres:15
+    container_name: usage-tracker-db
+    restart: always
+    environment:
+      POSTGRES_USER: usage_tracker
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-changeme}
+      POSTGRES_DB: usage_tracker
+    volumes:
+      - usage_tracker_db:/var/lib/postgresql/data
+    networks: [usage-tracker-network]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U usage_tracker -d usage_tracker"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build: .
+    container_name: usage-tracker-api
+    restart: always
+    ports:
+      - "${API_PUBLISH_PORT:-8000}:8000"
+    environment:
+      DATABASE_URL: postgresql+psycopg2://usage_tracker:${DB_PASSWORD:-changeme}@database:5432/usage_tracker
+      API_KEY: ${API_KEY:?API_KEY must be set in .env}
+    depends_on:
+      database:
+        condition: service_healthy
+    networks: [usage-tracker-network]
+
+  grafana:
+    image: grafana/grafana-oss:11.4.0
+    container_name: usage-tracker-grafana
+    restart: always
+    ports:
+      - "${FRONTEND_PUBLISH_PORT:-3005}:3000"
+    environment:
+      DB_PASSWORD: ${DB_PASSWORD:-changeme}
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning
+    depends_on:
+      database:
+        condition: service_healthy
+    networks: [usage-tracker-network]
+
+volumes:
+  usage_tracker_db:
+
+networks:
+  usage-tracker-network:
+    driver: bridge
