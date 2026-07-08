@@ -4,6 +4,8 @@ from pydantic_settings import BaseSettings
 class Settings(BaseSettings):
     database_url: str
     api_key: str
+    dashboard_username: str = "admin"
+    dashboard_password: str
 
     class Config:
         env_file = ".env"

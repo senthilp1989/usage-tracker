@@ -25,27 +25,21 @@ services:
     environment:
       DATABASE_URL: postgresql+psycopg2://usage_tracker:${DB_PASSWORD:-changeme}@database:5432/usage_tracker
       API_KEY: ${API_KEY:?API_KEY must be set in .env}
+      DASHBOARD_USERNAME: ${DASHBOARD_USERNAME:-admin}
+      DASHBOARD_PASSWORD: ${DASHBOARD_PASSWORD:?DASHBOARD_PASSWORD must be set in .env}
     depends_on:
       database:
         condition: service_healthy
     networks: [usage-tracker-network]
 
-  grafana:
-    image: grafana/grafana-oss:11.4.0
-    container_name: usage-tracker-grafana
+  frontend:
+    build: ./frontend
+    container_name: usage-tracker-frontend
     restart: always
     ports:
-      - "${FRONTEND_PUBLISH_PORT:-3005}:3000"
-    environment:
-      DB_PASSWORD: ${DB_PASSWORD:-changeme}
-      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
-      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
-      GF_USERS_ALLOW_SIGN_UP: "false"
-    volumes:
-      - ./grafana/provisioning:/etc/grafana/provisioning
+      - "${FRONTEND_PUBLISH_PORT:-3005}:80"
     depends_on:
-      database:
-        condition: service_healthy
+      - api
     networks: [usage-tracker-network]
 
 volumes:
