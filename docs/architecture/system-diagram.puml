@@ -1,0 +1,51 @@
+@startuml system-diagram
+title Usage Tracker — System Architecture
+
+skinparam backgroundColor #FFFFFF
+skinparam defaultTextAlignment center
+skinparam shadowing false
+skinparam roundcorner 8
+skinparam rectangle {
+  BorderColor #666666
+}
+skinparam cloud {
+  BackgroundColor #333333
+  FontColor #FFFFFF
+  BorderColor #111111
+}
+skinparam database {
+  BackgroundColor #FDF6E3
+  BorderColor #B58900
+}
+skinparam package {
+  BorderColor #888888
+  FontStyle bold
+}
+skinparam ArrowColor #444444
+
+actor "User" as User
+
+package "Frontend container (:3005)" {
+  rectangle "nginx\nserves React SPA + proxies /api/*" as NGINX
+}
+
+package "API container (:8000)" {
+  rectangle "FastAPI api\ningestion + dashboard endpoints" as API
+}
+
+database "PostgreSQL 15\nusage_reports (1 row/user/day)" as DB
+
+cloud "Test Ease\nusage reporter (external)" as TE
+
+User --> NGINX : HTTP — SPA assets +\n/api/* (Bearer HMAC token, 12h)
+NGINX --> API : proxy_pass,\n/api prefix stripped
+TE --> API : REST POST /reports\n(X-API-Key)
+API --> DB : SQL (SQLAlchemy/psycopg2,\npassword auth, internal network)
+
+note bottom of TE
+  Dark boxes = external systems
+  this system depends on but does
+  not control.
+end note
+
+@enduml

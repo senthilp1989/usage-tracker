@@ -1,0 +1,64 @@
+@startuml system-workflow
+title Usage Tracker — Workflow (Test Ease reports totals; an admin views the dashboard)
+
+skinparam backgroundColor #FFFFFF
+skinparam shadowing false
+skinparam sequenceMessageAlign center
+skinparam roundcorner 8
+skinparam ArrowColor #444444
+skinparam ArrowFontColor #333333
+skinparam NoteBackgroundColor #FFF7E0
+skinparam NoteBorderColor #E0C46C
+
+actor "User" as User
+
+participant "nginx\n(SPA + /api proxy)" as NGINX #E8F5E9
+participant "FastAPI api\n(ingestion + dashboard)" as API #E3F2FD
+
+database "PostgreSQL\n(usage_reports)" as DB #ECEFF1
+boundary  "Test Ease\n(usage reporter)"  as TE #ECEFF1
+
+== Step 1 — Test Ease reports today's running totals ==
+TE -> API : POST /reports (X-API-Key)\nrunning totals for jane@…
+activate API
+API -> DB : SELECT row for (user, report_date)
+DB --> API : existing row (or none)
+API -> DB : INSERT / UPDATE — **upsert UsageReport**
+API --> TE : 200 — stored totals echoed
+deactivate API
+
+== Step 2 — The admin opens the dashboard ==
+User -> NGINX : GET / (dashboard :3005)
+NGINX --> User : **React SPA** (login screen — no token yet)
+
+== Step 3 — Login mints a 12h session token ==
+User -> NGINX : POST /api/dashboard/login
+NGINX -> API : /dashboard/login (prefix stripped)
+activate API
+API -> API : verify credentials,\nmint **HMAC token** (12h expiry)
+API --> NGINX : { token, expires_at }
+deactivate API
+NGINX --> User : token → localStorage
+
+== Step 4 — Fetch aggregated stats ==
+User -> NGINX : GET /api/dashboard/summary?from&to\n(Authorization: Bearer)
+NGINX -> API : /dashboard/summary
+activate API
+API -> API : verify token HMAC + expiry
+API -> DB : SUM metrics, COUNT DISTINCT users,\nGROUP BY report_date
+DB --> API : aggregate rows
+API --> NGINX : **StatsSummary / DailyStats** JSON
+deactivate API
+NGINX --> User : 📊 dashboard data
+
+== Step 5 — Render ==
+User -> User : render **KPI tiles + SVG trend chart**
+
+note across
+  Test Ease sends **running daily totals** on an interval — not one event
+  per action — and each report **upserts** one Postgres row per user per day.
+  The dashboard never queries Postgres directly: it reads aggregates through
+  the same FastAPI service, behind nginx's /api proxy and an HMAC session token.
+end note
+
+@enduml
