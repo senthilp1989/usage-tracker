@@ -23,6 +23,12 @@ const NH = 76;
 // systems, SaaS) — they render as dashed cards, matching the "dark cloud"
 // convention from the Mermaid/PlantUML diagrams.
 //
+// Optional `desc`: 1-2 sentences shown in the node inspector (the side panel
+// that opens when a node card is clicked). Write it for every node — it's the
+// "what is this component and why does it exist" line. The inspector also
+// derives the node's connections and step appearances automatically from
+// STEPS, so desc is the only extra authoring this feature needs.
+//
 // LAYOUT RULES (avoid overlap, leave room for chat bubbles):
 //  - Arrange nodes in columns (pipeline stages) and rows (siblings at that
 //    stage). Column gap >= 100px between card edges. Row gap >= 140px
@@ -34,11 +40,11 @@ const NH = 76;
 //  - STAGE_W / STAGE_H = bounding box of (x + NW) / (y + NH) across all
 //    nodes, plus ~20-40px margin.
 const NODES = {
-    USER: { id: "USER", x: 40, y: 130, icon: "👤", title: "User / Browser", sub: "React SPA · dashboard admin", color: "#8b5cf6" },
-  NGINX: { id: "NGINX", x: 340, y: 130, icon: "🌐", title: "nginx", sub: "SPA host + /api proxy", color: "#10b981" },
-  API: { id: "API", x: 640, y: 130, icon: "⚡", title: "FastAPI api", sub: "Uvicorn · SQLAlchemy", color: "#3b82f6" },
-  DB: { id: "DB", x: 940, y: 130, icon: "🐘", title: "PostgreSQL", sub: "usage_reports · 1 row/user/day", color: "#f59e0b" },
-  TESTEASE: { id: "TESTEASE", x: 640, y: 350, icon: "🧪", title: "Test Ease", sub: "usage reporter (external)", color: "#64748b", external: true },
+    USER: { id: "USER", x: 40, y: 130, icon: "👤", title: "User / Browser", sub: "React SPA · dashboard admin", color: "#8b5cf6", desc: "The dashboard admin's browser running the React 18 SPA (Vite build). It keeps the 12h session token in localStorage and renders the KPI tiles, the hand-rolled SVG trend chart, and the per-user table." },
+  NGINX: { id: "NGINX", x: 340, y: 130, icon: "🌐", title: "nginx", sub: "SPA host + /api proxy", color: "#10b981", desc: "Web server inside the frontend container: serves the built SPA with an index.html fallback and reverse-proxies /api/* to the API container, stripping the /api prefix on the way through." },
+  API: { id: "API", x: 640, y: 130, icon: "⚡", title: "FastAPI api", sub: "Uvicorn · SQLAlchemy", color: "#3b82f6", desc: "FastAPI service (Uvicorn, SQLAlchemy 2, Pydantic v2) that owns both auth schemes — shared X-API-Key for ingestion, HMAC-signed 12h session tokens for dashboard reads — and aggregates all stats at query time." },
+  DB: { id: "DB", x: 940, y: 130, icon: "🐘", title: "PostgreSQL", sub: "usage_reports · 1 row/user/day", color: "#f59e0b", desc: "PostgreSQL 15, reachable only on the internal Docker network. A single usage_reports table holds one upserted row per user per day; schema comes from create_all at startup — no migrations." },
+  TESTEASE: { id: "TESTEASE", x: 640, y: 350, icon: "🧪", title: "Test Ease", sub: "usage reporter (external)", color: "#64748b", external: true, desc: "The external product being measured — the sole ingestion client. On a fixed interval it POSTs each user's running daily totals to /reports; it never sends one event per action." },
 };
 
 const center = (n) => ({ x: NODES[n].x + NW / 2, y: NODES[n].y + NH / 2 });
@@ -132,6 +138,21 @@ function buildPath(f, t) {
 
 const pairKey = (a, b) => [a, b].sort().join("|");
 
+// Derived per-node info for the click-to-open node inspector: every unique
+// route label the node participates in, and every step index it appears at
+// (rendered as clickable chips that jump the demo to that step).
+function nodeInfo(id) {
+  const routes = [];
+  const stepIdxs = [];
+  STEPS.forEach((s, i) => {
+    if (s.f === id || s.t === id) {
+      stepIdxs.push(i);
+      if (routes.indexOf(s.route) === -1) routes.push(s.route);
+    }
+  });
+  return { routes, stepIdxs };
+}
+
 // Pairs that need arrowheads on BOTH ends because the flow is a
 // request/response round-trip along one edge, not two distinct steps.
 // Must exactly match every pairKey(f, t) used with roundTrip: true above.
@@ -181,14 +202,23 @@ export function UsageTrackerDemoFlow() {
   const [isPlaying, setIsPlaying] = useState(false);
   const [phaseText, setPhaseText] = useState("Ready");
   const [isDoneDisabled, setIsDoneDisabled] = useState(false);
+  // progress mirrors idxRef into React state so the scrubber / step counter /
+  // button labels re-render as the run advances.
+  const [progress, setProgress] = useState(-1);
+  // Node inspector: id of the clicked node, or null when closed.
+  const [inspected, setInspected] = useState(null);
 
   const stageRef = useRef(null);
   const logRef = useRef(null);
+  const scrubTrackRef = useRef(null);
 
   const playingRef = useRef(false);
   const idxRef = useRef(-1);
   const speedRef = useRef(0.5);
   const animRef = useRef(null);
+  // True while the ⏭ Step phase fast-forward runs — jumpTo must not fire then
+  // (DOM log-item listeners bypass the disabled-button guards).
+  const ffRef = useRef(false);
 
   const [isFullscreen, setIsFullscreen] = useState(false);
   const containerRef = useRef(null);
@@ -214,6 +244,12 @@ export function UsageTrackerDemoFlow() {
       document.removeEventListener("fullscreenchange", handleFullscreenChange);
   }, []);
 
+  useEffect(() => {
+    Object.keys(nodeElsRef.current).forEach((id) =>
+      nodeElsRef.current[id].classList.toggle("inspected", id === inspected),
+    );
+  }, [inspected]);
+
   const edgesRef = useRef({});
   const nodeElsRef = useRef({});
   const pulseRef = useRef(null);
@@ -235,7 +271,7 @@ export function UsageTrackerDemoFlow() {
     () => () => {
       if (animRef.current) cancelAnimationFrame(animRef.current);
     },
-    []
+    [],
   );
 
   useEffect(() => {
@@ -337,7 +373,7 @@ export function UsageTrackerDemoFlow() {
         bx +
         nx * half
       ).toFixed(1)},${(by + ny * half).toFixed(1)} ${(bx - nx * half).toFixed(
-        1
+        1,
       )},${(by - ny * half).toFixed(1)}`;
       const poly = el("polygon", { points: pts, class: "arrow" });
       arrowLayer.appendChild(poly);
@@ -383,23 +419,26 @@ export function UsageTrackerDemoFlow() {
           width: NW,
           height: NH,
           rx: 12,
-        })
+        }),
       );
       g.appendChild(
-        el("circle", { cx: n.x + 30, cy: n.y + NH / 2, r: 19, fill: n.color })
+        el("circle", { cx: n.x + 30, cy: n.y + NH / 2, r: 19, fill: n.color }),
       );
       g.appendChild(
         el(
           "text",
           { class: "node-icon", x: n.x + 30, y: n.y + NH / 2 + 1 },
-          n.icon
-        )
+          n.icon,
+        ),
       );
       g.appendChild(
-        el("text", { class: "node-title", x: n.x + 58, y: n.y + 31 }, n.title)
+        el("text", { class: "node-title", x: n.x + 58, y: n.y + 31 }, n.title),
       );
       g.appendChild(
-        el("text", { class: "node-sub", x: n.x + 58, y: n.y + 50 }, n.sub)
+        el("text", { class: "node-sub", x: n.x + 58, y: n.y + 50 }, n.sub),
+      );
+      g.addEventListener("click", () =>
+        setInspected((prev) => (prev === id ? null : id)),
       );
       stageRef.current.appendChild(g);
       nodeEls[id] = g;
@@ -458,10 +497,10 @@ export function UsageTrackerDemoFlow() {
 
   function clearActive() {
     Object.values(edgesRef.current).forEach((e) =>
-      e.el.classList.remove("active", "flow", "call", "data", "flow-reverse")
+      e.el.classList.remove("active", "flow", "call", "data", "flow-reverse"),
     );
     Object.values(nodeElsRef.current).forEach((g) =>
-      g.classList.remove("active", "working", "db-ingesting")
+      g.classList.remove("active", "working", "db-ingesting"),
     );
     if (pulseRef.current) pulseRef.current.setAttribute("opacity", "0");
     allArrowsRef.current.forEach((a) => a.classList.remove("blink"));
@@ -495,7 +534,7 @@ export function UsageTrackerDemoFlow() {
 
     const fo = document.createElementNS(
       "http://www.w3.org/2000/svg",
-      "foreignObject"
+      "foreignObject",
     );
     fo.setAttribute("x", String(bx));
     fo.setAttribute("y", String(by));
@@ -535,7 +574,7 @@ export function UsageTrackerDemoFlow() {
       if (pulseRef.current) {
         pulseRef.current.setAttribute(
           "class",
-          "pulse " + (kind === "data" ? "data" : "call")
+          "pulse " + (kind === "data" ? "data" : "call"),
         );
         pulseRef.current.setAttribute("opacity", "1");
       }
@@ -583,6 +622,8 @@ export function UsageTrackerDemoFlow() {
         ${s.m}
       </div>
     `;
+    item.title = "Jump to this step";
+    item.addEventListener("click", () => jumpTo(i));
     logRef.current.appendChild(item);
     logRef.current.scrollTop = logRef.current.scrollHeight;
   }
@@ -641,7 +682,7 @@ export function UsageTrackerDemoFlow() {
 
         const secondsLeft = Math.max(
           0,
-          Math.ceil((totalDuration - elapsed) / 1000)
+          Math.ceil((totalDuration - elapsed) / 1000),
         );
         if (timeLeftEl) timeLeftEl.textContent = secondsLeft + "s";
 
@@ -659,7 +700,7 @@ export function UsageTrackerDemoFlow() {
           if (filesEl) filesEl.textContent = `${fileIdx + 1} / ${files.length}`;
           addConsoleLog(
             `[${Math.round(pct)}%] Writing ${f.name} (${f.size})...`,
-            "active"
+            "active",
           );
           if (localLogEl) {
             const lines = localLogEl.querySelectorAll(".log-line");
@@ -716,7 +757,7 @@ export function UsageTrackerDemoFlow() {
             fileEmojis[Math.floor(Math.random() * fileEmojis.length)];
           const p = document.createElementNS(
             "http://www.w3.org/2000/svg",
-            "text"
+            "text",
           );
           p.setAttribute("x", String(startX));
           p.setAttribute("y", String(startY));
@@ -726,7 +767,7 @@ export function UsageTrackerDemoFlow() {
           p.setAttribute("opacity", "0.9");
           p.setAttribute(
             "style",
-            `cursor: default; user-select: none; font-family: 'Apple Color Emoji', 'Segoe UI Emoji', 'Noto Color Emoji';`
+            `cursor: default; user-select: none; font-family: 'Apple Color Emoji', 'Segoe UI Emoji', 'Noto Color Emoji';`,
           );
           p.textContent = emoji;
           dbParticlesGroupRef.current.appendChild(p);
@@ -772,6 +813,7 @@ export function UsageTrackerDemoFlow() {
       const s = STEPS[i];
       clearActive();
       setPhaseText(PHASES[s.ph]);
+      setProgress(i);
       addLog(i);
 
       const currentSpeed = speedRef.current;
@@ -851,7 +893,7 @@ export function UsageTrackerDemoFlow() {
       if (pulseRef.current) {
         pulseRef.current.setAttribute(
           "class",
-          "pulse " + (s.k === "data" ? "data" : "call")
+          "pulse " + (s.k === "data" ? "data" : "call"),
         );
         pulseRef.current.setAttribute("opacity", "1");
       }
@@ -955,12 +997,63 @@ export function UsageTrackerDemoFlow() {
   function resetAnimation(repaint = true, keepLogs = false) {
     stopPlay();
     idxRef.current = -1;
+    setProgress(-1);
     clearActive();
     Object.values(nodeElsRef.current).forEach((g) =>
-      g.classList.remove("done")
+      g.classList.remove("done"),
     );
     if (!keepLogs && logRef.current) logRef.current.innerHTML = "";
     if (repaint) setPhaseText("Ready");
+  }
+
+  // Jump the demo to the state where step `target` has just completed:
+  // done-marks and the activity log are rebuilt for steps 0..target, and the
+  // target step's nodes, edge and chat are shown statically so the jumped-to
+  // moment reads at a glance. target = -1 lands on the pristine "Ready" state.
+  // This backs the scrubber, the ⏮ Back button, the clickable activity log,
+  // and the inspector's step chips.
+  function jumpTo(target) {
+    if (ffRef.current) return;
+    stopPlay();
+    target = Math.max(-1, Math.min(STEPS.length - 1, target));
+    idxRef.current = target;
+    setProgress(target);
+    clearActive();
+    Object.values(nodeElsRef.current).forEach((g) =>
+      g.classList.remove("done"),
+    );
+    if (logRef.current) logRef.current.innerHTML = "";
+    for (let i = 0; i <= target; i++) {
+      markDone(STEPS[i].f);
+      markDone(STEPS[i].t);
+      addLog(i);
+    }
+    if (target < 0) {
+      setPhaseText("Ready");
+      return;
+    }
+    const s = STEPS[target];
+    setPhaseText(PHASES[s.ph]);
+    const fromNode = nodeElsRef.current[s.f];
+    const toNode = nodeElsRef.current[s.t];
+    if (fromNode) fromNode.classList.add("active");
+    if (toNode) toNode.classList.add("active");
+    if (s.f !== s.t) {
+      const edge = edgesRef.current[pairKey(s.f, s.t)];
+      if (edge)
+        edge.el.classList.add("active", s.k === "data" ? "data" : "call");
+    }
+    (s.chat || []).forEach((c) => addBubble(c[0], c[1]));
+  }
+
+  function scrubToEvent(e) {
+    const track = scrubTrackRef.current;
+    if (!track) return;
+    const r = track.getBoundingClientRect();
+    let frac = (e.clientX - r.left) / r.width;
+    frac = Math.max(0, Math.min(0.999, frac));
+    const i = Math.floor(frac * STEPS.length);
+    if (i !== idxRef.current) jumpTo(i);
   }
 
   async function handleStep() {
@@ -970,6 +1063,7 @@ export function UsageTrackerDemoFlow() {
     const targetPh = nextStep.ph;
 
     setIsDoneDisabled(true);
+    ffRef.current = true;
     const savedSpeed = speedRef.current;
     speedRef.current = 250;
 
@@ -991,6 +1085,7 @@ export function UsageTrackerDemoFlow() {
       clearActive();
       setPhaseText(PHASES[STEPS[idxRef.current].ph]);
     }
+    ffRef.current = false;
     setIsDoneDisabled(false);
   }
 
@@ -1034,9 +1129,16 @@ export function UsageTrackerDemoFlow() {
         >
           {isPlaying
             ? "⏸ Pause"
-            : idxRef.current >= STEPS.length - 1
-            ? "▶ Replay"
-            : "▶ Play"}
+            : progress >= STEPS.length - 1
+              ? "▶ Replay"
+              : "▶ Play"}
+        </button>
+        <button
+          onClick={() => jumpTo(idxRef.current - 1)}
+          disabled={isPlaying || isDoneDisabled || progress < 0}
+          title="Back one step"
+        >
+          ⏮ Back
         </button>
         <button onClick={handleStep} disabled={isPlaying || isDoneDisabled}>
           ⏭ Step
@@ -1066,6 +1168,37 @@ export function UsageTrackerDemoFlow() {
         <span className="phase-tag">{phaseText}</span>
       </div>
 
+      <div className="scrubber">
+        <span className="scrub-count">
+          {progress + 1} / {STEPS.length}
+        </span>
+        <div
+          ref={scrubTrackRef}
+          className="scrub-track"
+          title="Drag or click to jump to any step"
+          onPointerDown={(e) => {
+            if (isDoneDisabled) return;
+            e.currentTarget.setPointerCapture(e.pointerId);
+            scrubToEvent(e);
+          }}
+          onPointerMove={(e) => {
+            if (isDoneDisabled || e.buttons !== 1) return;
+            scrubToEvent(e);
+          }}
+        >
+          {STEPS.map((s, i) => (
+            <div
+              key={i}
+              className={
+                "scrub-seg" +
+                (i <= progress ? " filled" : "") +
+                (i > 0 && STEPS[i - 1].ph !== s.ph ? " phase-start" : "")
+              }
+            />
+          ))}
+        </div>
+      </div>
+
       <div className="wrap">
         <div className="stage-area">
           <svg
@@ -1077,6 +1210,58 @@ export function UsageTrackerDemoFlow() {
           ></svg>
         </div>
         <aside className="side">
+          {inspected && NODES[inspected] && (
+            <div className="inspector">
+              <div className="inspector-head">
+                <span
+                  className="inspector-icon"
+                  style={{ background: NODES[inspected].color }}
+                >
+                  {NODES[inspected].icon}
+                </span>
+                <div className="inspector-name">
+                  <div className="inspector-title">
+                    {NODES[inspected].title}
+                  </div>
+                  <div className="inspector-sub">{NODES[inspected].sub}</div>
+                </div>
+                <button
+                  className="inspector-close"
+                  onClick={() => setInspected(null)}
+                  title="Close inspector"
+                >
+                  ✕
+                </button>
+              </div>
+              {NODES[inspected].external && (
+                <span className="inspector-badge">
+                  External system — depended on, not owned
+                </span>
+              )}
+              {NODES[inspected].desc && (
+                <p className="inspector-desc">{NODES[inspected].desc}</p>
+              )}
+              <div className="inspector-section">Connections</div>
+              <ul className="inspector-routes">
+                {nodeInfo(inspected).routes.map((r) => (
+                  <li key={r}>{r}</li>
+                ))}
+              </ul>
+              <div className="inspector-section">Appears in steps</div>
+              <div className="inspector-steps">
+                {nodeInfo(inspected).stepIdxs.map((i) => (
+                  <button
+                    key={i}
+                    className="inspector-step-chip"
+                    onClick={() => jumpTo(i)}
+                    title={STEPS[i].m}
+                  >
+                    {i + 1}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
           <h2>Activity log</h2>
           <div ref={logRef} className="log"></div>
         </aside>
