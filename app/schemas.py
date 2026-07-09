@@ -1,9 +1,6 @@
 from datetime import date, datetime
-from typing import Literal, Optional
 
 from pydantic import BaseModel, EmailStr
-
-EventType = Literal["test_case_created", "test_case_executed", "document_generated"]
 
 
 class UsageReportIn(BaseModel):
@@ -17,25 +14,6 @@ class UsageReportIn(BaseModel):
 
 class UsageReportOut(UsageReportIn):
     reported_at: datetime
-
-    class Config:
-        from_attributes = True
-
-
-class UsageEventIn(BaseModel):
-    stack_id: str
-    user_email: EmailStr
-    event_type: EventType
-    occurred_at: Optional[datetime] = None  # defaults to receipt time
-
-
-class UsageEventOut(BaseModel):
-    id: int
-    stack_id: str
-    user_email: EmailStr
-    event_type: EventType
-    occurred_at: datetime
-    created_at: datetime
 
     class Config:
         from_attributes = True

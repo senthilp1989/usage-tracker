@@ -1,18 +1,18 @@
 # Usage Tracker
 
-A standalone service for tracking per-user product usage in Test Ease. Test Ease calls the API whenever a user performs a tracked action (creates a test case, executes a test case, generates a document); the backend validates and persists each event to PostgreSQL, and a custom React dashboard visualizes the captured data.
+A standalone service for tracking per-user product usage in Test Ease. Test Ease periodically reports each user's running daily totals (test cases created, test cases executed, documents generated); the backend upserts each report into PostgreSQL, and a custom React dashboard visualizes the captured data.
 
 ## Architecture
 
 ```
-Test Ease ──POST /events──▶ FastAPI api ──▶ PostgreSQL (usage_events)
+Test Ease ──POST /reports──▶ FastAPI api ──▶ PostgreSQL (usage_reports)
             (X-API-Key)          ▲
                                  │ /api/* (Bearer token)
                     React dashboard (nginx)
 ```
 
 - **Backend** — FastAPI + SQLAlchemy. Ingestion is authenticated with a shared `X-API-Key`; dashboard endpoints use a signed session token obtained via username/password login.
-- **Database** — PostgreSQL 15. `usage_events` is append-only: one row per tracked action (`stack_id`, `user_email`, `event_type`, `occurred_at`). All dashboard numbers are aggregated at query time.
+- **Database** — PostgreSQL 15. `usage_reports` holds one row per user per day (`stack_id`, `user_email`, `report_date`, `test_cases_created`, `test_cases_executed`, `documents_generated`); each incoming report overwrites that day's row with the latest totals. All dashboard numbers are aggregated at query time.
 - **Frontend** — React + TypeScript (Vite), hand-rolled SVG charts, served by nginx which also proxies `/api/*` to the backend. Light and dark mode follow the OS preference.
 
 ## Quick start
@@ -48,30 +48,30 @@ All configuration is via `.env` (see `.env.example`):
 
 ## Ingestion API (called by Test Ease)
 
-Send one request per tracked action. Requires the `X-API-Key` header.
+Test Ease reports each user's running daily totals on a fixed interval (not per-action). Requires the `X-API-Key` header.
 
 ```bash
-curl -X POST http://localhost:8000/events \
+curl -X POST http://localhost:8000/reports \
   -H "X-API-Key: $API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
     "stack_id": "stack-eu-1",
     "user_email": "jane@example.com",
-    "event_type": "test_case_created"
+    "report_date": "2026-07-08",
+    "test_cases_created": 3,
+    "test_cases_executed": 5,
+    "documents_generated": 1
   }'
 ```
 
-- `event_type` is one of `test_case_created`, `test_case_executed`, `document_generated`.
-- `occurred_at` (ISO 8601 timestamp) is optional and defaults to the time the event is received — include it if events are queued/batched client-side.
-- Events are immutable; there is no update or delete.
-
-The legacy `GET/POST /reports` daily-totals endpoints still exist for older Test Ease deployments but are deprecated; new integrations should use `/events`.
+- Each report is an **upsert** keyed on `user_email` + `report_date` — send the day's running total so far, not a delta; the new values replace the previous row for that day.
+- `GET /reports` lists all rows (requires `X-API-Key`).
 
 ## Dashboard
 
 Sign in at the frontend port. The dashboard shows, scoped by a date-range preset (today / 7 / 30 / 90 days / custom) and an optional user filter:
 
-- KPI tiles: users reporting, and totals for each event type
+- KPI tiles: users reporting, and totals for each metric (test cases created/executed, documents generated)
 - Daily activity chart (with a table view toggle and hover tooltips)
 - Per-user totals table with last-activity timestamps
 
@@ -106,13 +106,12 @@ app/                    FastAPI application
   main.py               App entrypoint, CORS, /health
   config.py             Env-based settings
   database.py           SQLAlchemy engine/session
-  models.py             UsageEvent (append-only) + legacy UsageReport
+  models.py             UsageReport (one row per user per day, upserted)
   schemas.py            Request/response models
   auth.py               X-API-Key check + dashboard session tokens (HMAC)
   routers/
-    events.py           POST /events — ingestion
+    reports.py          POST /reports (upsert) + GET /reports — ingestion
     dashboard.py        Login + aggregated stats for the frontend
-    reports.py          Legacy daily-totals upsert API (deprecated)
 frontend/               React + TypeScript dashboard (Vite)
   src/components/       Stat tiles, filters, SVG trend chart, users table
   nginx.conf            Serves the SPA, proxies /api/* to the backend

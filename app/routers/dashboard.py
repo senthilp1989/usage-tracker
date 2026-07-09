@@ -1,20 +1,18 @@
 import hmac
-from datetime import date, datetime, time, timezone
+from datetime import date, datetime, timezone
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import case, distinct, func
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from ..auth import create_dashboard_token, verify_dashboard_token
 from ..config import settings
 from ..database import get_db
-from ..models import UsageEvent
+from ..models import UsageReport
 from ..schemas import DailyStats, LoginIn, LoginOut, StatsSummary, UserStats
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
-
-EVENT_TYPES = ("test_case_created", "test_case_executed", "document_generated")
 
 
 @router.post("/login", response_model=LoginOut)
@@ -28,19 +26,17 @@ def login(payload: LoginIn) -> LoginOut:
 
 
 def _scoped(query, date_from: date, date_to: date, user_email: Optional[str]):
-    query = query.filter(
-        UsageEvent.occurred_at >= datetime.combine(date_from, time.min, tzinfo=timezone.utc),
-        UsageEvent.occurred_at < datetime.combine(date_to, time.max, tzinfo=timezone.utc),
-    )
+    query = query.filter(UsageReport.report_date >= date_from, UsageReport.report_date <= date_to)
     if user_email:
-        query = query.filter(UsageEvent.user_email == user_email)
+        query = query.filter(UsageReport.user_email == user_email)
     return query
 
 
-def _type_counts():
+def _totals():
     return [
-        func.coalesce(func.sum(case((UsageEvent.event_type == t, 1), else_=0)), 0).label(t)
-        for t in EVENT_TYPES
+        func.coalesce(func.sum(UsageReport.test_cases_created), 0).label("test_cases_created"),
+        func.coalesce(func.sum(UsageReport.test_cases_executed), 0).label("test_cases_executed"),
+        func.coalesce(func.sum(UsageReport.documents_generated), 0).label("documents_generated"),
     ]
 
 
@@ -52,14 +48,14 @@ def summary(
     db: Session = Depends(get_db),
 ) -> StatsSummary:
     row = _scoped(
-        db.query(func.count(distinct(UsageEvent.user_email)).label("users"), *_type_counts()),
+        db.query(func.count(func.distinct(UsageReport.user_email)).label("users"), *_totals()),
         date_from, date_to, user_email,
     ).one()
     return StatsSummary(
         users_reporting=row.users,
-        test_cases_created=row.test_case_created,
-        test_cases_executed=row.test_case_executed,
-        documents_generated=row.document_generated,
+        test_cases_created=row.test_cases_created,
+        test_cases_executed=row.test_cases_executed,
+        documents_generated=row.documents_generated,
     )
 
 
@@ -70,9 +66,9 @@ def daily(
     user_email: Optional[str] = None,
     db: Session = Depends(get_db),
 ) -> List[DailyStats]:
-    day = func.date(UsageEvent.occurred_at).label("day")
+    day = UsageReport.report_date.label("day")
     rows = (
-        _scoped(db.query(day, *_type_counts()), date_from, date_to, user_email)
+        _scoped(db.query(day, *_totals()), date_from, date_to, user_email)
         .group_by(day)
         .order_by(day)
         .all()
@@ -80,9 +76,9 @@ def daily(
     return [
         DailyStats(
             day=r.day,
-            test_cases_created=r.test_case_created,
-            test_cases_executed=r.test_case_executed,
-            documents_generated=r.document_generated,
+            test_cases_created=r.test_cases_created,
+            test_cases_executed=r.test_cases_executed,
+            documents_generated=r.documents_generated,
         )
         for r in rows
     ]
@@ -97,22 +93,22 @@ def users(
     rows = (
         _scoped(
             db.query(
-                UsageEvent.user_email,
-                *_type_counts(),
-                func.max(UsageEvent.occurred_at).label("last_event_at"),
+                UsageReport.user_email,
+                *_totals(),
+                func.max(UsageReport.reported_at).label("last_event_at"),
             ),
             date_from, date_to, None,
         )
-        .group_by(UsageEvent.user_email)
-        .order_by(UsageEvent.user_email)
+        .group_by(UsageReport.user_email)
+        .order_by(UsageReport.user_email)
         .all()
     )
     return [
         UserStats(
             user_email=r.user_email,
-            test_cases_created=r.test_case_created,
-            test_cases_executed=r.test_case_executed,
-            documents_generated=r.document_generated,
+            test_cases_created=r.test_cases_created,
+            test_cases_executed=r.test_cases_executed,
+            documents_generated=r.documents_generated,
             last_event_at=r.last_event_at,
         )
         for r in rows
@@ -121,4 +117,4 @@ def users(
 
 @router.get("/user-emails", response_model=List[str], dependencies=[Depends(verify_dashboard_token)])
 def user_emails(db: Session = Depends(get_db)) -> List[str]:
-    return [r[0] for r in db.query(UsageEvent.user_email).distinct().order_by(UsageEvent.user_email).all()]
+    return [r[0] for r in db.query(UsageReport.user_email).distinct().order_by(UsageReport.user_email).all()]

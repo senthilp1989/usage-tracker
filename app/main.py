@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .database import Base, engine
-from .routers import dashboard, events, reports
+from .routers import dashboard, reports
 
 Base.metadata.create_all(bind=engine)
 
@@ -16,7 +16,6 @@ app.add_middleware(
 )
 
 app.include_router(reports.router)
-app.include_router(events.router)
 app.include_router(dashboard.router)
 
 
