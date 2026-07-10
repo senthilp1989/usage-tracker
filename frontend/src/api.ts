@@ -43,7 +43,7 @@ export async function login(username: string, password: string): Promise<void> {
 function scope(range: DateRange, userEmail?: string, environmentId?: string): string {
   const params = new URLSearchParams({ from: range.from, to: range.to });
   if (userEmail) params.set("user_email", userEmail);
-  if (environmentId) params.set("environment_id", environmentId);
+  if (environmentId) params.set("environment", environmentId);
   return params.toString();
 }
 
@@ -60,4 +60,4 @@ export const fetchUserEmails = () =>
   request<string[]>("/dashboard/user-emails");
 
 export const fetchEnvironmentIds = () =>
-  request<string[]>("/dashboard/environment-ids");
+  request<string[]>("/dashboard/environments");

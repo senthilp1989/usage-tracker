@@ -188,7 +188,7 @@ const DB_INGEST_PARTICLE_PATH = {
   endY: 168,
 };
 
-const TITLE = "Usage Tracker — Live Request Flow";
+const TITLE = "iVolve Usage Tracker — Live Request Flow";
 const SUBTITLE = "Test Ease reports running daily totals; an admin logs in and reads the aggregates";
 
 // ============================================================================

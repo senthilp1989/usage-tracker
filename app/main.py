@@ -1,12 +1,9 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from .database import Base, engine
 from .routers import dashboard, reports
 
-Base.metadata.create_all(bind=engine)
-
-app = FastAPI(title="Usage Tracker")
+app = FastAPI(title="iVolve Usage Tracker")
 
 app.add_middleware(
     CORSMiddleware,

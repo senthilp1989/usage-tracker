@@ -1,4 +1,4 @@
-# Usage Tracker
+# iVolve Usage Tracker
 
 A standalone service for tracking per-user product usage in Test Ease. Test Ease periodically reports each user's running daily totals (test cases created, test cases executed, documents generated); the backend upserts each report into PostgreSQL, and a custom React dashboard visualizes the captured data.
 
@@ -12,7 +12,7 @@ Test Ease ──POST /reports──▶ FastAPI api ──▶ PostgreSQL (usage_r
 ```
 
 - **Backend** — FastAPI + SQLAlchemy. Ingestion is authenticated with a shared `X-API-Key`; dashboard endpoints use a signed session token obtained via username/password login.
-- **Database** — PostgreSQL 15. `usage_reports` holds one row per user per environment per day (`stack_id`, `user_email`, `environment_id`, `report_date`, `test_cases_created`, `test_cases_executed`, `documents_generated`), unique on (`user_email`, `report_date`, `environment_id`); each incoming report overwrites that row with the latest totals. KPI tiles and the daily chart are aggregated at query time; the per-user table shows individual report rows.
+- **Database** — PostgreSQL 15. `usage_reports` holds one row per user per environment per day (`user_email`, `environment`, `report_date`, `test_cases_created`, `test_cases_executed`, `documents_generated`), unique on (`user_email`, `report_date`, `environment`); each incoming report overwrites that row with the latest totals. KPI tiles and the daily chart are aggregated at query time; the per-user table shows individual report rows.
 - **Frontend** — React + TypeScript (Vite), hand-rolled SVG charts, served by nginx which also proxies `/api/*` to the backend. Light and dark mode follow the OS preference.
 
 ## Quick start
@@ -55,9 +55,8 @@ curl -X POST http://localhost:8000/reports \
   -H "X-API-Key: $API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
-    "stack_id": "stack-eu-1",
     "user_email": "jane@example.com",
-    "environment_id": "prod",
+    "environment": "prod",
     "report_date": "2026-07-08",
     "test_cases_created": 3,
     "test_cases_executed": 5,
@@ -71,12 +70,12 @@ curl -X POST http://localhost:8000/reports \
   -H "X-API-Key: $API_KEY" \
   -H "Content-Type: application/json" \
   -d '[
-    { "stack_id": "stack-eu-1", "user_email": "jane@example.com", "environment_id": "prod", "report_date": "2026-07-08", "test_cases_created": 3, "test_cases_executed": 5, "documents_generated": 1 },
-    { "stack_id": "stack-eu-1", "user_email": "jane@example.com", "environment_id": "staging", "report_date": "2026-07-08", "test_cases_created": 1, "test_cases_executed": 1, "documents_generated": 0 }
+    { "user_email": "jane@example.com", "environment": "prod", "report_date": "2026-07-08", "test_cases_created": 3, "test_cases_executed": 5, "documents_generated": 1 },
+    { "user_email": "jane@example.com", "environment": "staging", "report_date": "2026-07-08", "test_cases_created": 1, "test_cases_executed": 1, "documents_generated": 0 }
   ]'
 ```
 
-- Each report is an **upsert** keyed on `user_email` + `report_date` + `environment_id` — send the day's running total so far for that environment, not a delta; the new values replace the previous row for that (user, day, environment).
+- Each report is an **upsert** keyed on `user_email` + `report_date` + `environment` — send the day's running total so far for that environment, not a delta; the new values replace the previous row for that (user, day, environment).
 - `GET /reports` lists all rows (requires `X-API-Key`).
 
 ## Dashboard
@@ -87,7 +86,7 @@ Sign in at the frontend port. The dashboard shows, scoped by a date-range preset
 - Daily activity chart (with a table view toggle and hover tooltips)
 - Usage-by-user table: one row per (user, environment, report date) with that report's metrics and last-activity timestamp — not a rolled-up total
 
-The dashboard talks to token-protected endpoints under `/dashboard/*` (`login`, `summary`, `daily`, `users`, `user-emails`, `environment-ids`). Sessions last 12 hours.
+The dashboard talks to token-protected endpoints under `/dashboard/*` (`login`, `summary`, `daily`, `users`, `user-emails`, `environments`). Sessions last 12 hours.
 
 ## Local development
 
@@ -109,7 +108,13 @@ npm install
 npm run dev
 ```
 
-Tables are created automatically at startup; there is no migration tool yet, so schema changes require recreating the database (or adding Alembic).
+Schema is managed by Alembic — the API container runs `alembic upgrade head` on startup (see Dockerfile). Locally, run migrations the same way:
+
+```bash
+DATABASE_URL=postgresql+psycopg2://usage_tracker:changeme@localhost:5432/usage_tracker alembic upgrade head
+```
+
+To add a schema change: edit `app/models.py`, then write a migration under `alembic/versions/` (autogenerate works too: `alembic revision --autogenerate -m "..."`, but always review the generated diff).
 
 ## Project structure
 
@@ -124,9 +129,11 @@ app/                    FastAPI application
   routers/
     reports.py          POST /reports (upsert) + GET /reports — ingestion
     dashboard.py        Login + aggregated stats for the frontend
+alembic/                Schema migrations (env.py, versions/)
+alembic.ini             Alembic config (DB URL resolved from app settings at runtime)
 frontend/               React + TypeScript dashboard (Vite)
   src/components/       Stat tiles, filters, SVG trend chart, users table
   nginx.conf            Serves the SPA, proxies /api/* to the backend
 docker-compose.yml      database + api + frontend
-Dockerfile              API image (python:3.11-slim + uvicorn)
+Dockerfile              API image (python:3.11-slim + uvicorn), runs `alembic upgrade head` before serving
 ```

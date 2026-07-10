@@ -11,13 +11,12 @@ class UsageReport(Base):
 
     __tablename__ = "usage_reports"
     __table_args__ = (
-        UniqueConstraint("user_email", "report_date", "environment_id", name="uq_usage_reports_user_date_env"),
+        UniqueConstraint("user_email", "report_date", "environment", name="uq_usage_reports_user_date_env"),
     )
 
     id = Column(Integer, primary_key=True)
-    stack_id = Column(String(255), nullable=False)
     user_email = Column(String(255), nullable=False, index=True)
-    environment_id = Column(String(255), nullable=False)
+    environment = Column(String(255), nullable=False)
     report_date = Column(Date, nullable=False, index=True)
     test_cases_created = Column(Integer, nullable=False, default=0)
     test_cases_executed = Column(Integer, nullable=False, default=0)

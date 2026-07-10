@@ -254,10 +254,6 @@ th.num {
   font-variant-numeric: tabular-nums;
 }
 
-td.muted {
-  color: var(--text-muted);
-}
-
 .empty-note {
   color: var(--text-muted);
   padding: 24px 0;

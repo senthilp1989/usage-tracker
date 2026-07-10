@@ -30,13 +30,13 @@ def _scoped(
     date_from: date,
     date_to: date,
     user_email: Optional[str],
-    environment_id: Optional[str] = None,
+    environment: Optional[str] = None,
 ):
     query = query.filter(UsageReport.report_date >= date_from, UsageReport.report_date <= date_to)
     if user_email:
         query = query.filter(UsageReport.user_email == user_email)
-    if environment_id:
-        query = query.filter(UsageReport.environment_id == environment_id)
+    if environment:
+        query = query.filter(UsageReport.environment == environment)
     return query
 
 
@@ -53,12 +53,12 @@ def summary(
     date_from: date = Query(alias="from"),
     date_to: date = Query(alias="to"),
     user_email: Optional[str] = None,
-    environment_id: Optional[str] = None,
+    environment: Optional[str] = None,
     db: Session = Depends(get_db),
 ) -> StatsSummary:
     row = _scoped(
         db.query(func.count(func.distinct(UsageReport.user_email)).label("users"), *_totals()),
-        date_from, date_to, user_email, environment_id,
+        date_from, date_to, user_email, environment,
     ).one()
     return StatsSummary(
         users_reporting=row.users,
@@ -73,12 +73,12 @@ def daily(
     date_from: date = Query(alias="from"),
     date_to: date = Query(alias="to"),
     user_email: Optional[str] = None,
-    environment_id: Optional[str] = None,
+    environment: Optional[str] = None,
     db: Session = Depends(get_db),
 ) -> List[DailyStats]:
     day = UsageReport.report_date.label("day")
     rows = (
-        _scoped(db.query(day, *_totals()), date_from, date_to, user_email, environment_id)
+        _scoped(db.query(day, *_totals()), date_from, date_to, user_email, environment)
         .group_by(day)
         .order_by(day)
         .all()
@@ -98,28 +98,28 @@ def daily(
 def users(
     date_from: date = Query(alias="from"),
     date_to: date = Query(alias="to"),
-    environment_id: Optional[str] = None,
+    environment: Optional[str] = None,
     db: Session = Depends(get_db),
 ) -> List[UserStats]:
     rows = (
         _scoped(
             db.query(
                 UsageReport.user_email,
-                UsageReport.environment_id,
+                UsageReport.environment,
                 UsageReport.report_date,
                 *_totals(),
                 func.max(UsageReport.reported_at).label("last_event_at"),
             ),
-            date_from, date_to, None, environment_id,
+            date_from, date_to, None, environment,
         )
-        .group_by(UsageReport.user_email, UsageReport.environment_id, UsageReport.report_date)
-        .order_by(UsageReport.user_email, UsageReport.environment_id, UsageReport.report_date)
+        .group_by(UsageReport.user_email, UsageReport.environment, UsageReport.report_date)
+        .order_by(UsageReport.user_email, UsageReport.environment, UsageReport.report_date)
         .all()
     )
     return [
         UserStats(
             user_email=r.user_email,
-            environment_id=r.environment_id,
+            environment=r.environment,
             report_date=r.report_date,
             test_cases_created=r.test_cases_created,
             test_cases_executed=r.test_cases_executed,
@@ -135,9 +135,9 @@ def user_emails(db: Session = Depends(get_db)) -> List[str]:
     return [r[0] for r in db.query(UsageReport.user_email).distinct().order_by(UsageReport.user_email).all()]
 
 
-@router.get("/environment-ids", response_model=List[str], dependencies=[Depends(verify_dashboard_token)])
-def environment_ids(db: Session = Depends(get_db)) -> List[str]:
+@router.get("/environments", response_model=List[str], dependencies=[Depends(verify_dashboard_token)])
+def environments(db: Session = Depends(get_db)) -> List[str]:
     return [
         r[0]
-        for r in db.query(UsageReport.environment_id).distinct().order_by(UsageReport.environment_id).all()
+        for r in db.query(UsageReport.environment).distinct().order_by(UsageReport.environment).all()
     ]

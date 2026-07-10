@@ -27,7 +27,7 @@ def _upsert_one(payload: UsageReportIn, db: Session) -> UsageReport:
         .filter_by(
             user_email=payload.user_email,
             report_date=payload.report_date,
-            environment_id=payload.environment_id,
+            environment=payload.environment,
         )
         .first()
     )
@@ -35,14 +35,13 @@ def _upsert_one(payload: UsageReportIn, db: Session) -> UsageReport:
         report = UsageReport(**payload.model_dump())
         db.add(report)
     else:
-        report.stack_id = payload.stack_id
         report.test_cases_created = payload.test_cases_created
         report.test_cases_executed = payload.test_cases_executed
         report.documents_generated = payload.documents_generated
         report.reported_at = datetime.now(timezone.utc)
 
     # Flush (not commit) so a later item in the same batch that shares this
-    # item's (user_email, report_date, environment_id) key sees it as an
+    # item's (user_email, report_date, environment) key sees it as an
     # update rather than colliding with the unique constraint on commit.
     db.flush()
     return report
