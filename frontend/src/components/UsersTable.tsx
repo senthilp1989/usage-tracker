@@ -13,6 +13,8 @@ export default function UsersTable({ rows }: { rows: UserStats[] }) {
           <thead>
             <tr>
               <th>Email</th>
+              <th>Environment</th>
+              <th>Date</th>
               {METRICS.map((m) => (
                 <th className="num" key={m.key}>
                   {m.label}
@@ -23,8 +25,10 @@ export default function UsersTable({ rows }: { rows: UserStats[] }) {
           </thead>
           <tbody>
             {rows.map((r) => (
-              <tr key={r.user_email}>
+              <tr key={`${r.user_email}-${r.environment_id}-${r.report_date}`}>
                 <td>{r.user_email}</td>
+                <td>{r.environment_id}</td>
+                <td>{r.report_date}</td>
                 {METRICS.map((m) => (
                   <td className="num" key={m.key}>
                     {r[m.key].toLocaleString()}

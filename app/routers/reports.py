@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from typing import List
+from typing import List, Union
 
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
@@ -21,11 +21,14 @@ def list_reports(db: Session = Depends(get_db)) -> List[UsageReport]:
     )
 
 
-@router.post("", response_model=UsageReportOut, dependencies=[Depends(verify_api_key)])
-def upsert_report(payload: UsageReportIn, db: Session = Depends(get_db)) -> UsageReport:
+def _upsert_one(payload: UsageReportIn, db: Session) -> UsageReport:
     report = (
         db.query(UsageReport)
-        .filter_by(user_email=payload.user_email, report_date=payload.report_date)
+        .filter_by(
+            user_email=payload.user_email,
+            report_date=payload.report_date,
+            environment_id=payload.environment_id,
+        )
         .first()
     )
     if report is None:
@@ -38,6 +41,25 @@ def upsert_report(payload: UsageReportIn, db: Session = Depends(get_db)) -> Usag
         report.documents_generated = payload.documents_generated
         report.reported_at = datetime.now(timezone.utc)
 
+    # Flush (not commit) so a later item in the same batch that shares this
+    # item's (user_email, report_date, environment_id) key sees it as an
+    # update rather than colliding with the unique constraint on commit.
+    db.flush()
+    return report
+
+
+@router.post("", response_model=Union[UsageReportOut, List[UsageReportOut]], dependencies=[Depends(verify_api_key)])
+def upsert_report(
+    payload: Union[UsageReportIn, List[UsageReportIn]], db: Session = Depends(get_db)
+) -> Union[UsageReport, List[UsageReport]]:
+    if isinstance(payload, list):
+        reports = [_upsert_one(item, db) for item in payload]
+        db.commit()
+        for report in reports:
+            db.refresh(report)
+        return reports
+
+    report = _upsert_one(payload, db)
     db.commit()
     db.refresh(report)
     return report

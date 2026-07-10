@@ -14,6 +14,8 @@ export interface DailyStats {
 
 export interface UserStats {
   user_email: string;
+  environment_id: string;
+  report_date: string; // YYYY-MM-DD
   test_cases_created: number;
   test_cases_executed: number;
   documents_generated: number;

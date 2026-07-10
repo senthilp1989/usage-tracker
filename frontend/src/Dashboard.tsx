@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   fetchDaily,
+  fetchEnvironmentIds,
   fetchSummary,
   fetchUserEmails,
   fetchUsers,
@@ -49,6 +50,8 @@ export default function Dashboard({
   );
   const [user, setUser] = useState("");
   const [userEmails, setUserEmails] = useState<string[]>([]);
+  const [environment, setEnvironment] = useState("");
+  const [environmentIds, setEnvironmentIds] = useState<string[]>([]);
   const [summary, setSummary] = useState<StatsSummary | null>(null);
   const [daily, setDaily] = useState<DailyStats[]>([]);
   const [users, setUsers] = useState<UserStats[]>([]);
@@ -64,17 +67,19 @@ export default function Dashboard({
     let cancelled = false;
     setLoading(true);
     Promise.all([
-      fetchSummary(range, user || undefined),
-      fetchDaily(range, user || undefined),
-      fetchUsers(range),
+      fetchSummary(range, user || undefined, environment || undefined),
+      fetchDaily(range, user || undefined, environment || undefined),
+      fetchUsers(range, environment || undefined),
       fetchUserEmails(),
+      fetchEnvironmentIds(),
     ])
-      .then(([s, d, u, emails]) => {
+      .then(([s, d, u, emails, envIds]) => {
         if (cancelled) return;
         setSummary(s);
         setDaily(d);
         setUsers(u);
         setUserEmails(emails);
+        setEnvironmentIds(envIds);
         setError(null);
       })
       .catch((err) => {
@@ -87,7 +92,7 @@ export default function Dashboard({
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [range.from, range.to, user]);
+  }, [range.from, range.to, user, environment]);
 
   const filled = useMemo(() => zeroFill(range, daily), [range, daily]);
   const visibleUsers = useMemo(
@@ -114,6 +119,9 @@ export default function Dashboard({
           onRangeChange={setRange}
           userEmails={userEmails}
           user={user}
+          environmentIds={environmentIds}
+          environment={environment}
+          onEnvironmentChange={setEnvironment}
           onUserChange={setUser}
         />
         {error && <div className="card login-error">{error}</div>}

@@ -40,20 +40,24 @@ export async function login(username: string, password: string): Promise<void> {
   localStorage.setItem(TOKEN_KEY, data.token);
 }
 
-function scope(range: DateRange, userEmail?: string): string {
+function scope(range: DateRange, userEmail?: string, environmentId?: string): string {
   const params = new URLSearchParams({ from: range.from, to: range.to });
   if (userEmail) params.set("user_email", userEmail);
+  if (environmentId) params.set("environment_id", environmentId);
   return params.toString();
 }
 
-export const fetchSummary = (range: DateRange, userEmail?: string) =>
-  request<StatsSummary>(`/dashboard/summary?${scope(range, userEmail)}`);
+export const fetchSummary = (range: DateRange, userEmail?: string, environmentId?: string) =>
+  request<StatsSummary>(`/dashboard/summary?${scope(range, userEmail, environmentId)}`);
 
-export const fetchDaily = (range: DateRange, userEmail?: string) =>
-  request<DailyStats[]>(`/dashboard/daily?${scope(range, userEmail)}`);
+export const fetchDaily = (range: DateRange, userEmail?: string, environmentId?: string) =>
+  request<DailyStats[]>(`/dashboard/daily?${scope(range, userEmail, environmentId)}`);
 
-export const fetchUsers = (range: DateRange) =>
-  request<UserStats[]>(`/dashboard/users?${scope(range)}`);
+export const fetchUsers = (range: DateRange, environmentId?: string) =>
+  request<UserStats[]>(`/dashboard/users?${scope(range, undefined, environmentId)}`);
 
 export const fetchUserEmails = () =>
   request<string[]>("/dashboard/user-emails");
+
+export const fetchEnvironmentIds = () =>
+  request<string[]>("/dashboard/environment-ids");

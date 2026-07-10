@@ -31,6 +31,9 @@ interface Props {
   userEmails: string[];
   user: string;
   onUserChange: (u: string) => void;
+  environmentIds: string[];
+  environment: string;
+  onEnvironmentChange: (e: string) => void;
 }
 
 export default function Filters({
@@ -41,6 +44,9 @@ export default function Filters({
   userEmails,
   user,
   onUserChange,
+  environmentIds,
+  environment,
+  onEnvironmentChange,
 }: Props) {
   return (
     <div className="filters">
@@ -82,6 +88,18 @@ export default function Filters({
         {userEmails.map((email) => (
           <option key={email} value={email}>
             {email}
+          </option>
+        ))}
+      </select>
+      <select
+        value={environment}
+        onChange={(e) => onEnvironmentChange(e.target.value)}
+        aria-label="Environment filter"
+      >
+        <option value="">All environments</option>
+        {environmentIds.map((id) => (
+          <option key={id} value={id}>
+            {id}
           </option>
         ))}
       </select>

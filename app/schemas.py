@@ -6,6 +6,7 @@ from pydantic import BaseModel, EmailStr
 class UsageReportIn(BaseModel):
     stack_id: str
     user_email: EmailStr
+    environment_id: str
     report_date: date
     test_cases_created: int = 0
     test_cases_executed: int = 0
@@ -45,6 +46,8 @@ class DailyStats(BaseModel):
 
 class UserStats(BaseModel):
     user_email: str
+    environment_id: str
+    report_date: date
     test_cases_created: int
     test_cases_executed: int
     documents_generated: int
