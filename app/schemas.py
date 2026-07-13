@@ -1,6 +1,9 @@
 from datetime import date, datetime
+from zoneinfo import ZoneInfo
 
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, field_serializer
+
+IST = ZoneInfo("Asia/Kolkata")
 
 
 class UsageReportIn(BaseModel):
@@ -17,6 +20,10 @@ class UsageReportOut(UsageReportIn):
 
     class Config:
         from_attributes = True
+
+    @field_serializer("reported_at")
+    def _reported_at_ist(self, value: datetime) -> datetime:
+        return value.astimezone(IST)
 
 
 class LoginIn(BaseModel):
@@ -51,3 +58,7 @@ class UserStats(BaseModel):
     test_cases_executed: int
     documents_generated: int
     last_event_at: datetime
+
+    @field_serializer("last_event_at")
+    def _last_event_at_ist(self, value: datetime) -> datetime:
+        return value.astimezone(IST)
