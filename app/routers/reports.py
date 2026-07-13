@@ -1,7 +1,8 @@
-from datetime import datetime, timezone
 from typing import List, Union
 
 from fastapi import APIRouter, Depends
+from sqlalchemy import func
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from ..auth import verify_api_key
@@ -22,29 +23,24 @@ def list_reports(db: Session = Depends(get_db)) -> List[UsageReport]:
 
 
 def _upsert_one(payload: UsageReportIn, db: Session) -> UsageReport:
-    report = (
-        db.query(UsageReport)
-        .filter_by(
-            user_email=payload.user_email,
-            report_date=payload.report_date,
-            environment=payload.environment,
+    # Atomic upsert: lets Postgres handle the conflict check instead of a
+    # separate SELECT-then-insert/update, which could race between two
+    # concurrent requests for the same (user_email, report_date, environment).
+    stmt = (
+        pg_insert(UsageReport)
+        .values(**payload.model_dump())
+        .on_conflict_do_update(
+            constraint="uq_usage_reports_user_date_env",
+            set_={
+                "test_cases_created": payload.test_cases_created,
+                "test_cases_executed": payload.test_cases_executed,
+                "documents_generated": payload.documents_generated,
+                "reported_at": func.now(),
+            },
         )
-        .first()
+        .returning(UsageReport)
     )
-    if report is None:
-        report = UsageReport(**payload.model_dump())
-        db.add(report)
-    else:
-        report.test_cases_created = payload.test_cases_created
-        report.test_cases_executed = payload.test_cases_executed
-        report.documents_generated = payload.documents_generated
-        report.reported_at = datetime.now(timezone.utc)
-
-    # Flush (not commit) so a later item in the same batch that shares this
-    # item's (user_email, report_date, environment) key sees it as an
-    # update rather than colliding with the unique constraint on commit.
-    db.flush()
-    return report
+    return db.scalars(stmt).one()
 
 
 @router.post("", response_model=Union[UsageReportOut, List[UsageReportOut]], dependencies=[Depends(verify_api_key)])
