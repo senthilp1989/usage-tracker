@@ -260,6 +260,33 @@ th.num {
   text-align: center;
 }
 
+/* Pagination */
+.pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 12px;
+}
+
+.pagination-info {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.pagination-controls {
+  display: flex;
+  gap: 8px;
+}
+
+.pagination-controls button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.pagination-controls button:disabled:hover {
+  border-color: var(--border);
+}
+
 /* Login */
 .login-page {
   min-height: 100vh;
