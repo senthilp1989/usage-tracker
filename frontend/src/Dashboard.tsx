@@ -44,9 +44,9 @@ export default function Dashboard({
   theme: Theme;
   onToggleTheme: () => void;
 }) {
-  const [preset, setPreset] = useState<Preset>("30d");
+  const [preset, setPreset] = useState<Preset>("today");
   const [range, setRange] = useState<DateRange>(() =>
-    presetRange("30d", new Date()),
+    presetRange("today", new Date()),
   );
   const [user, setUser] = useState("");
   const [userEmails, setUserEmails] = useState<string[]>([]);
