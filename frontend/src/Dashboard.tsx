@@ -48,9 +48,9 @@ export default function Dashboard({
   const [range, setRange] = useState<DateRange>(() =>
     presetRange("today", new Date()),
   );
-  const [user, setUser] = useState("");
+  const [user, setUser] = useState<string[]>([]);
   const [userEmails, setUserEmails] = useState<string[]>([]);
-  const [environment, setEnvironment] = useState("");
+  const [environment, setEnvironment] = useState<string[]>([]);
   const [environmentIds, setEnvironmentIds] = useState<string[]>([]);
   const [summary, setSummary] = useState<StatsSummary | null>(null);
   const [daily, setDaily] = useState<DailyStats[]>([]);
@@ -67,9 +67,9 @@ export default function Dashboard({
     let cancelled = false;
     setLoading(true);
     Promise.all([
-      fetchSummary(range, user || undefined, environment || undefined),
-      fetchDaily(range, user || undefined, environment || undefined),
-      fetchUsers(range, environment || undefined),
+      fetchSummary(range, user, environment),
+      fetchDaily(range, user, environment),
+      fetchUsers(range, user, environment),
       fetchUserEmails(),
       fetchEnvironmentIds(),
     ])
@@ -92,13 +92,9 @@ export default function Dashboard({
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [range.from, range.to, user, environment]);
+  }, [range.from, range.to, user.join(","), environment.join(",")]);
 
   const filled = useMemo(() => zeroFill(range, daily), [range, daily]);
-  const visibleUsers = useMemo(
-    () => (user ? users.filter((u) => u.user_email === user) : users),
-    [users, user],
-  );
 
   return (
     <>
@@ -144,7 +140,7 @@ export default function Dashboard({
           />
         </div>
         <DailyTrend data={filled} />
-        <UsersTable rows={visibleUsers} range={range} />
+        <UsersTable rows={users} range={range} />
       </main>
     </>
   );

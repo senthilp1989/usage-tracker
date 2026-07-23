@@ -1,3 +1,4 @@
+import MultiSelect from "./MultiSelect";
 import type { DateRange } from "../types";
 
 export type Preset = "today" | "7d" | "30d" | "90d" | "custom";
@@ -29,11 +30,11 @@ interface Props {
   range: DateRange;
   onRangeChange: (r: DateRange) => void;
   userEmails: string[];
-  user: string;
-  onUserChange: (u: string) => void;
+  user: string[];
+  onUserChange: (u: string[]) => void;
   environmentIds: string[];
-  environment: string;
-  onEnvironmentChange: (e: string) => void;
+  environment: string[];
+  onEnvironmentChange: (e: string[]) => void;
 }
 
 export default function Filters({
@@ -79,30 +80,20 @@ export default function Filters({
           />
         </>
       )}
-      <select
-        value={user}
-        onChange={(e) => onUserChange(e.target.value)}
-        aria-label="User filter"
-      >
-        <option value="">All users</option>
-        {userEmails.map((email) => (
-          <option key={email} value={email}>
-            {email}
-          </option>
-        ))}
-      </select>
-      <select
-        value={environment}
-        onChange={(e) => onEnvironmentChange(e.target.value)}
-        aria-label="Environment filter"
-      >
-        <option value="">All environments</option>
-        {environmentIds.map((id) => (
-          <option key={id} value={id}>
-            {id}
-          </option>
-        ))}
-      </select>
+      <MultiSelect
+        label="User filter"
+        placeholder="All users"
+        options={userEmails}
+        selected={user}
+        onChange={onUserChange}
+      />
+      <MultiSelect
+        label="Environment filter"
+        placeholder="All environments"
+        options={environmentIds}
+        selected={environment}
+        onChange={onEnvironmentChange}
+      />
     </div>
   );
 }

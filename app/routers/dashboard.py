@@ -29,14 +29,14 @@ def _scoped(
     query,
     date_from: date,
     date_to: date,
-    user_email: Optional[str],
-    environment: Optional[str] = None,
+    user_email: Optional[List[str]],
+    environment: Optional[List[str]] = None,
 ):
     query = query.filter(UsageReport.report_date >= date_from, UsageReport.report_date <= date_to)
     if user_email:
-        query = query.filter(UsageReport.user_email == user_email)
+        query = query.filter(UsageReport.user_email.in_(user_email))
     if environment:
-        query = query.filter(UsageReport.environment == environment)
+        query = query.filter(UsageReport.environment.in_(environment))
     return query
 
 
@@ -52,8 +52,8 @@ def _totals():
 def summary(
     date_from: date = Query(alias="from"),
     date_to: date = Query(alias="to"),
-    user_email: Optional[str] = None,
-    environment: Optional[str] = None,
+    user_email: Optional[List[str]] = Query(default=None),
+    environment: Optional[List[str]] = Query(default=None),
     db: Session = Depends(get_db),
 ) -> StatsSummary:
     row = _scoped(
@@ -72,8 +72,8 @@ def summary(
 def daily(
     date_from: date = Query(alias="from"),
     date_to: date = Query(alias="to"),
-    user_email: Optional[str] = None,
-    environment: Optional[str] = None,
+    user_email: Optional[List[str]] = Query(default=None),
+    environment: Optional[List[str]] = Query(default=None),
     db: Session = Depends(get_db),
 ) -> List[DailyStats]:
     day = UsageReport.report_date.label("day")
@@ -98,7 +98,8 @@ def daily(
 def users(
     date_from: date = Query(alias="from"),
     date_to: date = Query(alias="to"),
-    environment: Optional[str] = None,
+    user_email: Optional[List[str]] = Query(default=None),
+    environment: Optional[List[str]] = Query(default=None),
     db: Session = Depends(get_db),
 ) -> List[UserStats]:
     rows = (
@@ -110,7 +111,7 @@ def users(
                 *_totals(),
                 func.max(UsageReport.reported_at).label("last_event_at"),
             ),
-            date_from, date_to, None, environment,
+            date_from, date_to, user_email, environment,
         )
         .group_by(UsageReport.user_email, UsageReport.environment, UsageReport.report_date)
         .order_by(UsageReport.user_email, UsageReport.environment, UsageReport.report_date)
