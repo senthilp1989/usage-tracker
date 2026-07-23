@@ -1,4 +1,4 @@
-# iVolve Usage Tracker
+# TestEase Usage Tracker
 
 Standalone usage-analytics service for Test Ease. Test Ease POSTs each user's **running daily totals** (test cases created/executed, documents generated) to `POST /reports` on a fixed interval — not per-action. `POST /reports` accepts either a single report object or a JSON array of them. Each report upserts one Postgres row per user per environment per day; a custom React dashboard (which replaced an earlier Grafana setup) reads aggregated and per-report stats through the API.
 

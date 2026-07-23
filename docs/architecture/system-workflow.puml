@@ -1,5 +1,5 @@
 @startuml system-workflow
-title iVolve Usage Tracker — Workflow (Test Ease reports totals; an admin views the dashboard)
+title TestEase Usage Tracker — Workflow (Test Ease reports totals; an admin views the dashboard)
 
 skinparam backgroundColor #FFFFFF
 skinparam shadowing false

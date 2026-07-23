@@ -1,8 +1,8 @@
-# iVolve Usage Tracker — System Architecture
+# TestEase Usage Tracker — System Architecture
 
 ## 1. What this project does
 
-iVolve Usage Tracker is a standalone usage-analytics service for **Test Ease** (an external product). Test Ease periodically POSTs each user's running daily totals — test cases created, test cases executed, documents generated — to the ingestion API; each report is upserted as one PostgreSQL row per user per day. An internal React dashboard authenticates with username/password, obtains a signed session token, and displays aggregated stats (KPI tiles, daily trend chart, per-user table) computed at query time. Everything runs as three Docker Compose services on one bridge network.
+TestEase Usage Tracker is a standalone usage-analytics service for **Test Ease** (an external product). Test Ease periodically POSTs each user's running daily totals — test cases created, test cases executed, documents generated — to the ingestion API; each report is upserted as one PostgreSQL row per user per day. An internal React dashboard authenticates with username/password, obtains a signed session token, and displays aggregated stats (KPI tiles, daily trend chart, per-user table) computed at query time. Everything runs as three Docker Compose services on one bridge network.
 
 ## 2. Components
 

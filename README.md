@@ -1,4 +1,4 @@
-# iVolve Usage Tracker
+# TestEase Usage Tracker
 
 A standalone service for tracking per-user product usage in Test Ease. Test Ease periodically reports each user's running daily totals (test cases created, test cases executed, documents generated); the backend upserts each report into PostgreSQL, and a custom React dashboard visualizes the captured data.
 

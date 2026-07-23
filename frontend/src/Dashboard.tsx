@@ -103,7 +103,7 @@ export default function Dashboard({
   return (
     <>
       <header className="app-header">
-        <h1>iVolve Usage Tracker</h1>
+        <h1>TestEase Usage Tracker</h1>
         <div className="header-actions">
           <ThemeToggle theme={theme} onToggle={onToggleTheme} />
           <button className="link-button" onClick={onLogout}>

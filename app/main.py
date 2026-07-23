@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .routers import dashboard, reports
 
-app = FastAPI(title="iVolve Usage Tracker")
+app = FastAPI(title="Testease Usage Tracker")
 
 app.add_middleware(
     CORSMiddleware,

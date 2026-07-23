@@ -1,11 +1,11 @@
 # System Architecture Diagram
 
-This diagram shows iVolve Usage Tracker's internal components, the direction data flows
+This diagram shows TestEase Usage Tracker's internal components, the direction data flows
 between them, and how it reaches its one external dependency: **Test Ease**.
 
 ## How it connects to Test Ease
 
-Test Ease is the sole ingestion client and the only system iVolve Usage Tracker depends
+Test Ease is the sole ingestion client and the only system TestEase Usage Tracker depends
 on but doesn't own. It POSTs each user's **running daily totals** (not per-action
 events) to `POST /reports` on a fixed interval, authenticated with a shared
 `X-API-Key` header; each report **upserts** one row per user per day. The

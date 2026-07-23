@@ -43,7 +43,7 @@ export default function Login({
         className="corner-toggle"
       />
       <form className="login-form card" onSubmit={submit}>
-        <h1>iVolve Usage Tracker</h1>
+        <h1>TestEase Usage Tracker</h1>
         <input
           placeholder="Username"
           value={username}

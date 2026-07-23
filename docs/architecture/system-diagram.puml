@@ -1,5 +1,5 @@
 @startuml system-diagram
-title iVolve Usage Tracker — System Architecture
+title TestEase Usage Tracker — System Architecture
 
 skinparam backgroundColor #FFFFFF
 skinparam defaultTextAlignment center

@@ -1,7 +1,7 @@
 # Usage Tracker — Integration Guide
 
 This document describes how an external system (e.g. Test Ease) should report
-usage data to the iVolve Usage Tracker. It covers authentication, the request
+usage data to the TestEase Usage Tracker. It covers authentication, the request
 format, upsert semantics, error handling, and a recommended reporting
 strategy.
 
