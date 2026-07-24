@@ -35,6 +35,9 @@ interface Props {
   environmentIds: string[];
   environment: string[];
   onEnvironmentChange: (e: string[]) => void;
+  search: string;
+  onSearchChange: (s: string) => void;
+  searchOverriding: boolean;
 }
 
 export default function Filters({
@@ -48,6 +51,9 @@ export default function Filters({
   environmentIds,
   environment,
   onEnvironmentChange,
+  search,
+  onSearchChange,
+  searchOverriding,
 }: Props) {
   return (
     <div className="filters">
@@ -80,19 +86,32 @@ export default function Filters({
           />
         </>
       )}
-      <MultiSelect
-        label="User filter"
-        placeholder="All users"
-        options={userEmails}
-        selected={user}
-        onChange={onUserChange}
-      />
-      <MultiSelect
-        label="Environment filter"
-        placeholder="All environments"
-        options={environmentIds}
-        selected={environment}
-        onChange={onEnvironmentChange}
+      <div className={searchOverriding ? "filters-overridden" : undefined} title={searchOverriding ? "Overridden by search" : undefined}>
+        <MultiSelect
+          label="User filter"
+          placeholder="All users"
+          options={userEmails}
+          selected={user}
+          onChange={onUserChange}
+        />
+      </div>
+      <div className={searchOverriding ? "filters-overridden" : undefined} title={searchOverriding ? "Overridden by search" : undefined}>
+        <MultiSelect
+          label="Environment filter"
+          placeholder="All environments"
+          options={environmentIds}
+          selected={environment}
+          onChange={onEnvironmentChange}
+        />
+      </div>
+      <input
+        type="search"
+        className="filters-search"
+        value={search}
+        onChange={(e) => onSearchChange(e.target.value)}
+        placeholder="Search environments…"
+        aria-label="Search environments"
+        title="Searching overrides the User and Environment filters above"
       />
     </div>
   );

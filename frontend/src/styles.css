@@ -105,6 +105,7 @@ body {
 
 .filters select,
 .filters input[type="date"],
+.filters input[type="search"],
 .login-form input {
   font: inherit;
   color: var(--text-primary);
@@ -112,6 +113,15 @@ body {
   border: 1px solid var(--border);
   border-radius: 6px;
   padding: 6px 10px;
+}
+
+.filters-search {
+  min-width: 220px;
+}
+
+.filters-overridden {
+  opacity: 0.45;
+  pointer-events: none;
 }
 
 .multiselect {

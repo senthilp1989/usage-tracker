@@ -13,7 +13,10 @@ import StatTile from "./components/StatTile";
 import ThemeToggle from "./components/ThemeToggle";
 import UsersTable from "./components/UsersTable";
 import type { Theme } from "./theme";
-import type { DailyStats, DateRange, StatsSummary, UserStats } from "./types";
+import { METRICS, type DailyStats, type DateRange, type StatsSummary, type UserStats } from "./types";
+import { fuzzyMatch } from "./fuzzy";
+
+const MIN_SEARCH_LEN = 2;
 
 function zeroFill(range: DateRange, rows: DailyStats[]): DailyStats[] {
   const byDay = new Map(rows.map((r) => [r.day, r]));
@@ -35,6 +38,29 @@ function zeroFill(range: DateRange, rows: DailyStats[]): DailyStats[] {
   return out;
 }
 
+function summarizeRows(rows: UserStats[]): StatsSummary {
+  const totals = { test_cases_created: 0, test_cases_executed: 0, documents_generated: 0 };
+  for (const row of rows) {
+    for (const metric of METRICS) totals[metric.key] += row[metric.key];
+  }
+  return { users_reporting: new Set(rows.map((r) => r.user_email)).size, ...totals };
+}
+
+function dailyFromRows(rows: UserStats[]): DailyStats[] {
+  const byDay = new Map<string, DailyStats>();
+  for (const row of rows) {
+    const entry = byDay.get(row.report_date) ?? {
+      day: row.report_date,
+      test_cases_created: 0,
+      test_cases_executed: 0,
+      documents_generated: 0,
+    };
+    for (const metric of METRICS) entry[metric.key] += row[metric.key];
+    byDay.set(row.report_date, entry);
+  }
+  return Array.from(byDay.values()).sort((a, b) => a.day.localeCompare(b.day));
+}
+
 export default function Dashboard({
   onLogout,
   theme,
@@ -52,9 +78,11 @@ export default function Dashboard({
   const [userEmails, setUserEmails] = useState<string[]>([]);
   const [environment, setEnvironment] = useState<string[]>([]);
   const [environmentIds, setEnvironmentIds] = useState<string[]>([]);
-  const [summary, setSummary] = useState<StatsSummary | null>(null);
-  const [daily, setDaily] = useState<DailyStats[]>([]);
-  const [users, setUsers] = useState<UserStats[]>([]);
+  const [search, setSearch] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
+  const [serverSummary, setServerSummary] = useState<StatsSummary | null>(null);
+  const [serverDaily, setServerDaily] = useState<DailyStats[]>([]);
+  const [rawUsers, setRawUsers] = useState<UserStats[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -64,20 +92,34 @@ export default function Dashboard({
   }
 
   useEffect(() => {
+    const timer = setTimeout(() => setDebouncedSearch(search), 300);
+    return () => clearTimeout(timer);
+  }, [search]);
+
+  const searchActive = debouncedSearch.trim().length >= MIN_SEARCH_LEN;
+  // While searching, the search term overrides the two dropdown filters —
+  // scope the fetch to the date range alone and let the client-side fuzzy
+  // filter below narrow it further, instead of asking the server for an
+  // ID list (a broad term like "ta" could match dozens of emails sharing a
+  // domain, which doesn't compose sensibly with the dropdown filters anyway).
+  const scopedUser = searchActive ? [] : user;
+  const scopedEnvironment = searchActive ? [] : environment;
+
+  useEffect(() => {
     let cancelled = false;
     setLoading(true);
     Promise.all([
-      fetchSummary(range, user, environment),
-      fetchDaily(range, user, environment),
-      fetchUsers(range, user, environment),
+      fetchSummary(range, scopedUser, scopedEnvironment),
+      fetchDaily(range, scopedUser, scopedEnvironment),
+      fetchUsers(range, scopedUser, scopedEnvironment),
       fetchUserEmails(),
       fetchEnvironmentIds(),
     ])
       .then(([s, d, u, emails, envIds]) => {
         if (cancelled) return;
-        setSummary(s);
-        setDaily(d);
-        setUsers(u);
+        setServerSummary(s);
+        setServerDaily(d);
+        setRawUsers(u);
         setUserEmails(emails);
         setEnvironmentIds(envIds);
         setError(null);
@@ -92,7 +134,18 @@ export default function Dashboard({
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [range.from, range.to, user.join(","), environment.join(",")]);
+  }, [range.from, range.to, scopedUser.join(","), scopedEnvironment.join(","), searchActive]);
+
+  const users = useMemo(
+    () =>
+      searchActive
+        ? rawUsers.filter((r) => fuzzyMatch(debouncedSearch, r.environment))
+        : rawUsers,
+    [rawUsers, searchActive, debouncedSearch],
+  );
+  const summary = searchActive ? summarizeRows(users) : serverSummary;
+  const daily = searchActive ? dailyFromRows(users) : serverDaily;
+  const searchHasNoMatches = searchActive && users.length === 0;
 
   const filled = useMemo(() => zeroFill(range, daily), [range, daily]);
 
@@ -119,8 +172,14 @@ export default function Dashboard({
           environment={environment}
           onEnvironmentChange={setEnvironment}
           onUserChange={setUser}
+          search={search}
+          onSearchChange={setSearch}
+          searchOverriding={searchActive}
         />
         {error && <div className="card login-error">{error}</div>}
+        {searchHasNoMatches && (
+          <div className="card login-error">No environments match “{debouncedSearch}”.</div>
+        )}
         <div className="kpi-row">
           <StatTile
             label="Users reporting"
