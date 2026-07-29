@@ -1,7 +1,7 @@
 import { useLayoutEffect, useMemo, useRef, useState } from "react";
-import { METRICS, type DailyStats } from "../types";
+import { TREND_METRICS, type DailyStats } from "../types";
 
-const SERIES = METRICS.map((m, i) => ({
+const SERIES = TREND_METRICS.map((m, i) => ({
   ...m,
   colorVar: `var(--series-${i + 1})`,
 }));
@@ -265,7 +265,7 @@ function DailyTable({ data }: { data: DailyStats[] }) {
       <thead>
         <tr>
           <th>Date</th>
-          {METRICS.map((m) => (
+          {TREND_METRICS.map((m) => (
             <th className="num" key={m.key}>
               {m.label}
             </th>
@@ -276,7 +276,7 @@ function DailyTable({ data }: { data: DailyStats[] }) {
         {data.map((d) => (
           <tr key={d.day}>
             <td>{d.day}</td>
-            {METRICS.map((m) => (
+            {TREND_METRICS.map((m) => (
               <td className="num" key={m.key}>
                 {d[m.key].toLocaleString()}
               </td>

@@ -45,6 +45,8 @@ def _totals():
         func.coalesce(func.sum(UsageReport.test_cases_created), 0).label("test_cases_created"),
         func.coalesce(func.sum(UsageReport.test_cases_executed), 0).label("test_cases_executed"),
         func.coalesce(func.sum(UsageReport.documents_generated), 0).label("documents_generated"),
+        func.coalesce(func.sum(UsageReport.test_cases_passed), 0).label("test_cases_passed"),
+        func.coalesce(func.sum(UsageReport.test_cases_failed), 0).label("test_cases_failed"),
     ]
 
 
@@ -65,6 +67,8 @@ def summary(
         test_cases_created=row.test_cases_created,
         test_cases_executed=row.test_cases_executed,
         documents_generated=row.documents_generated,
+        test_cases_passed=row.test_cases_passed,
+        test_cases_failed=row.test_cases_failed,
     )
 
 
@@ -89,6 +93,8 @@ def daily(
             test_cases_created=r.test_cases_created,
             test_cases_executed=r.test_cases_executed,
             documents_generated=r.documents_generated,
+            test_cases_passed=r.test_cases_passed,
+            test_cases_failed=r.test_cases_failed,
         )
         for r in rows
     ]
@@ -125,6 +131,8 @@ def users(
             test_cases_created=r.test_cases_created,
             test_cases_executed=r.test_cases_executed,
             documents_generated=r.documents_generated,
+            test_cases_passed=r.test_cases_passed,
+            test_cases_failed=r.test_cases_failed,
             last_event_at=r.last_event_at,
         )
         for r in rows

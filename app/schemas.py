@@ -13,6 +13,8 @@ class UsageReportIn(BaseModel):
     test_cases_created: int = 0
     test_cases_executed: int = 0
     documents_generated: int = 0
+    test_cases_passed: int = 0
+    test_cases_failed: int = 0
 
 
 class UsageReportOut(UsageReportIn):
@@ -41,6 +43,8 @@ class StatsSummary(BaseModel):
     test_cases_created: int
     test_cases_executed: int
     documents_generated: int
+    test_cases_passed: int
+    test_cases_failed: int
 
 
 class DailyStats(BaseModel):
@@ -48,6 +52,8 @@ class DailyStats(BaseModel):
     test_cases_created: int
     test_cases_executed: int
     documents_generated: int
+    test_cases_passed: int
+    test_cases_failed: int
 
 
 class UserStats(BaseModel):
@@ -57,6 +63,8 @@ class UserStats(BaseModel):
     test_cases_created: int
     test_cases_executed: int
     documents_generated: int
+    test_cases_passed: int
+    test_cases_failed: int
     last_event_at: datetime
 
     @field_serializer("last_event_at")

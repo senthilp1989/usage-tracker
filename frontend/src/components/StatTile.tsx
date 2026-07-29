@@ -7,15 +7,17 @@ export function formatCompact(n: number): string {
 export default function StatTile({
   label,
   value,
+  format = formatCompact,
 }: {
   label: string;
   value: number;
+  format?: (n: number) => string;
 }) {
   return (
     <div className="card">
       <p className="stat-label">{label}</p>
       <div className="stat-value" title={value.toLocaleString()}>
-        {formatCompact(value)}
+        {format(value)}
       </div>
     </div>
   );

@@ -21,4 +21,6 @@ class UsageReport(Base):
     test_cases_created = Column(Integer, nullable=False, default=0)
     test_cases_executed = Column(Integer, nullable=False, default=0)
     documents_generated = Column(Integer, nullable=False, default=0)
+    test_cases_passed = Column(Integer, nullable=False, default=0)
+    test_cases_failed = Column(Integer, nullable=False, default=0)
     reported_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())

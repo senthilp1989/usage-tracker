@@ -35,6 +35,8 @@ def _upsert_one(payload: UsageReportIn, db: Session) -> UsageReport:
                 "test_cases_created": payload.test_cases_created,
                 "test_cases_executed": payload.test_cases_executed,
                 "documents_generated": payload.documents_generated,
+                "test_cases_passed": payload.test_cases_passed,
+                "test_cases_failed": payload.test_cases_failed,
                 "reported_at": func.now(),
             },
         )

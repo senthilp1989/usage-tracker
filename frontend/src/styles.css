@@ -12,6 +12,8 @@
   --border: rgba(11, 11, 11, 0.1);
   --accent: #2a78d6;
   --critical: #d03b3b;
+  --good: #0ca30c;
+  --warning: #fab219;
   --series-1: #2a78d6; /* test cases created */
   --series-2: #1baf7a; /* test cases executed */
   --series-3: #eda100; /* documents generated */
@@ -28,6 +30,8 @@
   --border: rgba(255, 255, 255, 0.1);
   --accent: #3987e5;
   --critical: #e66767;
+  --good: #0ca30c;
+  --warning: #fab219;
   --series-1: #3987e5;
   --series-2: #199e70;
   --series-3: #c98500;
@@ -258,6 +262,65 @@ button.primary {
   font-size: 32px;
   font-weight: 600;
   line-height: 1.1;
+}
+
+/* Pass/fail pie + pass-rate meter row */
+.pie-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 16px;
+}
+
+.pie-chart-wrap {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  flex-wrap: wrap;
+}
+
+.pie-legend {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.pie-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.pie-legend-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  flex: none;
+}
+
+.pie-legend-item strong {
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+  margin-left: auto;
+  padding-left: 16px;
+}
+
+.meter-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.meter-value {
+  position: absolute;
+  font-size: 28px;
+  font-weight: 600;
+  color: var(--text-primary);
 }
 
 /* Chart */
