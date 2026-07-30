@@ -1,18 +1,18 @@
 # TestEase Usage Tracker
 
-A standalone service for tracking per-user product usage in Test Ease. Test Ease periodically reports each user's running daily totals (test cases created, test cases executed, documents generated); the backend upserts each report into PostgreSQL, and a custom React dashboard visualizes the captured data.
+A standalone service for tracking per-user product usage in Test Ease. Test Ease reports raw, per-event usage rows (test case created, test case executed, document generated — no grouping) on a fixed interval; the backend inserts them into PostgreSQL, and a custom React dashboard aggregates and visualizes them at query time.
 
 ## Architecture
 
 ```
-Test Ease ──POST /reports──▶ FastAPI api ──▶ PostgreSQL (usage_reports)
-            (X-API-Key)          ▲
-                                 │ /api/* (Bearer token)
+Test Ease ──POST /events──▶ FastAPI api ──▶ PostgreSQL (test_case_created_events,
+            (X-API-Key)          ▲                        test_case_executed_events,
+                                 │ /api/* (Bearer token)   document_generated_events)
                     React dashboard (nginx)
 ```
 
 - **Backend** — FastAPI + SQLAlchemy. Ingestion is authenticated with a shared `X-API-Key`; dashboard endpoints use a signed session token obtained via username/password login.
-- **Database** — PostgreSQL 15. `usage_reports` holds one row per user per environment per day (`user_email`, `environment`, `report_date`, `test_cases_created`, `test_cases_executed`, `documents_generated`), unique on (`user_email`, `report_date`, `environment`); each incoming report overwrites that row with the latest totals. KPI tiles and the daily chart are aggregated at query time; the per-user table shows individual report rows.
+- **Database** — PostgreSQL 15. Three raw event tables — one row per test case creation (+ `test_case_name`), per test case execution (+ `test_case_name`, `status`), and per generated document — each with `user_email`, `environment`, `interface_name`, `created_at`, and a unique constraint on those (plus `test_case_name` where present) as a de-dupe backstop against resends. No aggregation happens on ingestion; the dashboard computes totals, pass/fail counts, and interface breakdowns at query time by grouping these tables. There is deliberately no `package_name` — it's never populated by the source system (only exists via a live SAP API call the source tool doesn't make), so it was dropped rather than kept as an always-"unknown" field. `created_at`/`reported_at` are stored as naive IST (UTC+5:30) timestamps — Test Ease shifts to IST once before sending, so no timezone conversion happens anywhere in this service. There's also a frozen `usage_reports` table from an earlier pre-aggregated design; it's no longer written to or read from, kept only as a historical archive.
 - **Frontend** — React + TypeScript (Vite), hand-rolled SVG charts, served by nginx which also proxies `/api/*` to the backend. Light and dark mode follow the OS preference.
 
 ## Quick start
@@ -25,7 +25,7 @@ docker compose up --build
 ```
 
 | Service   | Container              | Port (host)                      |
-| --------- | ---------------------- | -------------------------------- |
+| --------- | ---------------------- | --------------------------------- |
 | Dashboard | usage-tracker-frontend | `${FRONTEND_PUBLISH_PORT:-3005}` |
 | API       | usage-tracker-api      | `${API_PUBLISH_PORT:-8000}`      |
 | Postgres  | usage-tracker-db       | internal only                    |
@@ -38,7 +38,7 @@ docker compose up --build
 All configuration is via `.env` (see `.env.example`):
 
 | Variable                | Default    | Purpose                            |
-| ----------------------- | ---------- | ---------------------------------- |
+| ----------------------- | ---------- | ----------------------------------- |
 | `API_KEY`               | _required_ | Key Test Ease sends as `X-API-Key` |
 | `DASHBOARD_PASSWORD`    | _required_ | Dashboard login password           |
 | `DASHBOARD_USERNAME`    | `admin`    | Dashboard login username           |
@@ -48,45 +48,40 @@ All configuration is via `.env` (see `.env.example`):
 
 ## Ingestion API (called by Test Ease)
 
-Test Ease reports each user's running daily totals on a fixed interval (not per-action). Requires the `X-API-Key` header. The body can be a single report object or a JSON array of them (batch).
+Test Ease reports raw, individual event rows on a fixed interval — not aggregated totals, and not per-action in real time (each cycle batches whatever's new since its last checkpoint). Requires the `X-API-Key` header. The body is a single object with three independent lists, any of which may be empty:
 
 ```bash
-curl -X POST http://localhost:8000/reports \
+curl -X POST http://localhost:8000/events \
   -H "X-API-Key: $API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
-    "user_email": "jane@example.com",
-    "environment": "prod",
-    "report_date": "2026-07-08",
-    "test_cases_created": 3,
-    "test_cases_executed": 5,
-    "documents_generated": 1
+    "test_cases_created": [
+      { "user_email": "jane@example.com", "environment": "prod", "interface_name": "OrderSync", "test_case_name": "TC_01", "created_at": "2026-07-08T14:32:05.120" }
+    ],
+    "test_cases_executed": [
+      { "user_email": "jane@example.com", "environment": "prod", "interface_name": "OrderSync", "test_case_name": "TC_01", "status": "PASSED", "created_at": "2026-07-08T14:35:10.500" }
+    ],
+    "documents_generated": []
   }'
 ```
 
-```bash
-# Batch: an array upserts each item; response shape (object vs array) mirrors the request
-curl -X POST http://localhost:8000/reports \
-  -H "X-API-Key: $API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '[
-    { "user_email": "jane@example.com", "environment": "prod", "report_date": "2026-07-08", "test_cases_created": 3, "test_cases_executed": 5, "documents_generated": 1 },
-    { "user_email": "jane@example.com", "environment": "staging", "report_date": "2026-07-08", "test_cases_created": 1, "test_cases_executed": 1, "documents_generated": 0 }
-  ]'
-```
-
-- Each report is an **upsert** keyed on `user_email` + `report_date` + `environment` — send the day's running total so far for that environment, not a delta; the new values replace the previous row for that (user, day, environment).
-- `GET /reports` lists all rows (requires `X-API-Key`).
+- Every row is a plain **insert**, not an upsert — these are immutable, append-only events. A row matching an existing natural key (`user_email, environment, interface_name`, plus `test_case_name` where applicable, plus `created_at`) is silently skipped (`ON CONFLICT DO NOTHING`), which only matters if Test Ease ever resends a window it already sent (e.g. after losing its own checkpoint state).
+- A malformed row (e.g. an invalid email) is rejected individually, not the whole batch — the response's `rejected` array lists which rows and why; everything else still gets inserted.
+- `created_at` must be a naive datetime string (no timezone offset/`Z` suffix) already shifted to IST — see `app/models.py` for why.
+- `GET /reports` still exists and lists the old frozen `usage_reports` archive (requires `X-API-Key`) — nothing writes to it anymore.
 
 ## Dashboard
 
 Sign in at the frontend port. The dashboard shows, scoped by a date-range preset (today / 7 / 30 / 90 days / custom) and optional user and environment filters:
 
-- KPI tiles: users reporting, and totals for each metric (test cases created/executed, documents generated)
+- KPI tiles: users reporting, and totals for each metric (test cases created/executed, documents generated, passed/failed)
 - Daily activity chart (with a table view toggle and hover tooltips)
-- Usage-by-user table: one row per (user, environment, report date) with that report's metrics and last-activity timestamp — not a rolled-up total
+- Usage-by-user table: one row per (user, environment, report date) with that day's metrics and last-activity timestamp — not a rolled-up total
+- Usage-by-interface table: independently filterable by interface, showing test cases created/executed per interface
 
-The dashboard talks to token-protected endpoints under `/dashboard/*` (`login`, `summary`, `daily`, `users`, `user-emails`, `environments`). Sessions last 12 hours.
+All filtering — date range, user, environment, interface — happens server-side via SQL, driven by query params; nothing is filtered client-side except the pre-existing environment search box and table pagination, which only ever operate on data already scoped by the backend.
+
+The dashboard talks to token-protected endpoints under `/dashboard/*` (`login`, `summary`, `daily`, `users`, `artifacts`, `user-emails`, `environments`, `interfaces`). Sessions last 12 hours.
 
 ## Local development
 
@@ -123,16 +118,18 @@ app/                    FastAPI application
   main.py               App entrypoint, CORS, /health
   config.py             Env-based settings
   database.py           SQLAlchemy engine/session
-  models.py             UsageReport (one row per user per environment per day, upserted)
+  models.py             TestCaseCreatedEvent / TestCaseExecutedEvent / DocumentGeneratedEvent
+                         (raw, one row per event) + frozen UsageReport archive
   schemas.py            Request/response models
   auth.py               X-API-Key check + dashboard session tokens (HMAC)
   routers/
-    reports.py          POST /reports (upsert) + GET /reports — ingestion
-    dashboard.py        Login + aggregated stats for the frontend
+    events.py           POST /events (insert, ON CONFLICT DO NOTHING) — ingestion
+    reports.py          Frozen: GET /reports (archive read) + POST /reports (unused, kept for the old route)
+    dashboard.py         Login + aggregated stats, computed at query time from the raw event tables
 alembic/                Schema migrations (env.py, versions/)
 alembic.ini             Alembic config (DB URL resolved from app settings at runtime)
 frontend/               React + TypeScript dashboard (Vite)
-  src/components/       Stat tiles, filters, SVG trend chart, users table
+  src/components/       Stat tiles, filters, SVG trend chart, users table, interface breakdown table
   nginx.conf            Serves the SPA, proxies /api/* to the backend
 docker-compose.yml      database + api + frontend
 Dockerfile              API image (python:3.11-slim + uvicorn), runs `alembic upgrade head` before serving

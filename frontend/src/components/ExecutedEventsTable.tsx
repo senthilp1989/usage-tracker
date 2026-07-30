@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { METRICS, type DateRange, type UserStats } from "../types";
+import type { DateRange, ExecutedEventDetail } from "../types";
 
 const PAGE_SIZE = 10;
 
@@ -8,35 +8,27 @@ function csvEscape(value: string | number): string {
   return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 }
 
-function toCsv(rows: UserStats[]): string {
-  const headers = ["Email", "Environment", "Date", ...METRICS.map((m) => m.label)];
+function toCsv(rows: ExecutedEventDetail[]): string {
+  const headers = ["Email", "Environment", "Interface", "Test case", "Status"];
   const lines = rows.map((r) =>
-    [r.user_email, r.environment, r.report_date, ...METRICS.map((m) => r[m.key])]
-      .map(csvEscape)
-      .join(","),
+    [r.user_email, r.environment, r.interface_name, r.test_case_name, r.status].map(csvEscape).join(","),
   );
   return [headers.join(","), ...lines].join("\n");
 }
 
-function downloadCsv(rows: UserStats[], range?: DateRange) {
+function downloadCsv(rows: ExecutedEventDetail[], range?: DateRange) {
   const blob = new Blob([toCsv(rows)], { type: "text/csv;charset=utf-8;" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
-  a.download = `usage-by-user${range ? `_${range.from}_to_${range.to}` : ""}.csv`;
+  a.download = `test-cases-executed${range ? `_${range.from}_to_${range.to}` : ""}.csv`;
   a.click();
   URL.revokeObjectURL(url);
 }
 
-export default function UsersTable({
-  rows,
-  range,
-}: {
-  rows: UserStats[];
-  range?: DateRange;
-}) {
-  const [page, setPage] = useState(1);
+export default function ExecutedEventsTable({ rows, range }: { rows: ExecutedEventDetail[]; range?: DateRange }) {
   const [expanded, setExpanded] = useState(false);
+  const [page, setPage] = useState(1);
   const pageCount = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
 
   useEffect(() => {
@@ -60,15 +52,13 @@ export default function UsersTable({
           <span className={`collapse-arrow${expanded ? " expanded" : ""}`} aria-hidden="true">
             ▸
           </span>
-          Usage by user ({rows.length.toLocaleString()})
+          Test cases executed ({rows.length.toLocaleString()})
         </button>
-        {expanded && rows.length > 0 && (
-          <button onClick={() => downloadCsv(rows, range)}>Download CSV</button>
-        )}
+        {expanded && rows.length > 0 && <button onClick={() => downloadCsv(rows, range)}>Download CSV</button>}
       </div>
       {expanded &&
         (rows.length === 0 ? (
-          <div className="empty-note">No events in this range yet.</div>
+          <div className="empty-note">No test cases executed in this range yet.</div>
         ) : (
           <>
             <table>
@@ -76,25 +66,19 @@ export default function UsersTable({
                 <tr>
                   <th>Email</th>
                   <th>Environment</th>
-                  <th>Date</th>
-                  {METRICS.map((m) => (
-                    <th className="num" key={m.key}>
-                      {m.label}
-                    </th>
-                  ))}
+                  <th>Interface</th>
+                  <th>Test case</th>
+                  <th>Status</th>
                 </tr>
               </thead>
               <tbody>
-                {pageRows.map((r) => (
-                  <tr key={`${r.user_email}-${r.environment}-${r.report_date}`}>
+                {pageRows.map((r, i) => (
+                  <tr key={`${r.user_email}-${r.environment}-${r.interface_name}-${r.test_case_name}-${i}`}>
                     <td>{r.user_email}</td>
                     <td>{r.environment}</td>
-                    <td>{r.report_date}</td>
-                    {METRICS.map((m) => (
-                      <td className="num" key={m.key}>
-                        {r[m.key].toLocaleString()}
-                      </td>
-                    ))}
+                    <td>{r.interface_name}</td>
+                    <td>{r.test_case_name}</td>
+                    <td>{r.status}</td>
                   </tr>
                 ))}
               </tbody>
@@ -105,16 +89,10 @@ export default function UsersTable({
                   Page {page} of {pageCount} &middot; {rows.length.toLocaleString()} rows
                 </span>
                 <div className="pagination-controls">
-                  <button
-                    onClick={() => setPage((p) => Math.max(1, p - 1))}
-                    disabled={page === 1}
-                  >
+                  <button onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page === 1}>
                     Previous
                   </button>
-                  <button
-                    onClick={() => setPage((p) => Math.min(pageCount, p + 1))}
-                    disabled={page === pageCount}
-                  >
+                  <button onClick={() => setPage((p) => Math.min(pageCount, p + 1))} disabled={page === pageCount}>
                     Next
                   </button>
                 </div>

@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from .routers import dashboard, reports
+from .routers import dashboard, events, reports
 
 app = FastAPI(title="Testease Usage Tracker")
 
@@ -13,6 +13,7 @@ app.add_middleware(
 )
 
 app.include_router(reports.router)
+app.include_router(events.router)
 app.include_router(dashboard.router)
 
 

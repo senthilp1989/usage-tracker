@@ -28,6 +28,31 @@ export interface UserStats {
   last_event_at: string;
 }
 
+export interface ArtifactStats {
+  environment: string;
+  interface_name: string;
+  test_cases_created: number;
+  test_cases_executed: number;
+  documents_generated: number;
+}
+
+export interface CreatedEventDetail {
+  user_email: string;
+  environment: string;
+  interface_name: string;
+  test_case_name: string;
+  created_at: string;
+}
+
+export interface ExecutedEventDetail {
+  user_email: string;
+  environment: string;
+  interface_name: string;
+  test_case_name: string;
+  status: string;
+  created_at: string;
+}
+
 export interface DateRange {
   from: string; // YYYY-MM-DD
   to: string; // YYYY-MM-DD

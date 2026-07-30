@@ -245,6 +245,34 @@ button.primary {
   border: none;
 }
 
+.collapse-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border: none;
+  background: none;
+  padding: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.collapse-toggle:hover {
+  color: var(--text-primary);
+  border: none;
+}
+
+.collapse-arrow {
+  display: inline-block;
+  color: var(--text-muted);
+  font-size: 10px;
+  transition: transform 0.15s ease;
+}
+
+.collapse-arrow.expanded {
+  transform: rotate(90deg);
+}
+
 /* KPI row of stat tiles */
 .kpi-row {
   display: grid;

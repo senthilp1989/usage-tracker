@@ -1,4 +1,5 @@
 from datetime import date, datetime
+from typing import List
 from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, EmailStr, field_serializer
@@ -38,6 +39,63 @@ class LoginOut(BaseModel):
     expires_at: datetime
 
 
+# --- Raw event ingestion (POST /events) ---
+#
+# created_at on all three of these arrives as a naive datetime string -
+# the source tool shifts it to IST once before sending, so it's stored and
+# read back as-is with no timezone attached (see models.py). Do not add a
+# field_serializer/astimezone conversion here or in the dashboard schemas
+# below - that per-row conversion is exactly what sending pre-shifted IST
+# values was meant to avoid.
+
+
+class TestCaseCreatedEventIn(BaseModel):
+    user_email: EmailStr
+    environment: str
+    interface_name: str
+    test_case_name: str
+    created_at: datetime
+
+
+class TestCaseExecutedEventIn(BaseModel):
+    user_email: EmailStr
+    environment: str
+    interface_name: str
+    test_case_name: str
+    status: str
+    created_at: datetime
+
+
+class DocumentGeneratedEventIn(BaseModel):
+    user_email: EmailStr
+    environment: str
+    interface_name: str
+    created_at: datetime
+
+
+class UsageEventsIn(BaseModel):
+    test_cases_created: List[TestCaseCreatedEventIn] = []
+    test_cases_executed: List[TestCaseExecutedEventIn] = []
+    documents_generated: List[DocumentGeneratedEventIn] = []
+
+
+class RejectedEvent(BaseModel):
+    event_type: str
+    index: int
+    reason: str
+
+
+class UsageEventsAccepted(BaseModel):
+    test_cases_created: int
+    test_cases_executed: int
+    documents_generated: int
+    rejected: List[RejectedEvent] = []
+
+
+# --- Dashboard aggregates (all computed at query time from the raw event
+# tables above) ---
+
+
 class StatsSummary(BaseModel):
     users_reporting: int
     test_cases_created: int
@@ -67,6 +125,27 @@ class UserStats(BaseModel):
     test_cases_failed: int
     last_event_at: datetime
 
-    @field_serializer("last_event_at")
-    def _last_event_at_ist(self, value: datetime) -> datetime:
-        return value.astimezone(IST)
+
+class ArtifactStats(BaseModel):
+    environment: str
+    interface_name: str
+    test_cases_created: int
+    test_cases_executed: int
+    documents_generated: int
+
+
+class CreatedEventDetail(BaseModel):
+    user_email: str
+    environment: str
+    interface_name: str
+    test_case_name: str
+    created_at: datetime
+
+
+class ExecutedEventDetail(BaseModel):
+    user_email: str
+    environment: str
+    interface_name: str
+    test_case_name: str
+    status: str
+    created_at: datetime

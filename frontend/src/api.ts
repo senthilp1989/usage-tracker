@@ -1,4 +1,12 @@
-import type { DailyStats, DateRange, StatsSummary, UserStats } from "./types";
+import type {
+  ArtifactStats,
+  CreatedEventDetail,
+  DailyStats,
+  DateRange,
+  ExecutedEventDetail,
+  StatsSummary,
+  UserStats,
+} from "./types";
 
 const TOKEN_KEY = "usage_tracker_token";
 
@@ -56,8 +64,37 @@ export const fetchDaily = (range: DateRange, userEmails?: string[], environmentI
 export const fetchUsers = (range: DateRange, userEmails?: string[], environmentIds?: string[]) =>
   request<UserStats[]>(`/dashboard/users?${scope(range, userEmails, environmentIds)}`);
 
+export const fetchCreatedEvents = (range: DateRange, userEmails?: string[], environmentIds?: string[]) =>
+  request<CreatedEventDetail[]>(`/dashboard/created-events?${scope(range, userEmails, environmentIds)}`);
+
+export const fetchExecutedEvents = (range: DateRange, userEmails?: string[], environmentIds?: string[]) =>
+  request<ExecutedEventDetail[]>(`/dashboard/executed-events?${scope(range, userEmails, environmentIds)}`);
+
 export const fetchUserEmails = () =>
   request<string[]>("/dashboard/user-emails");
 
 export const fetchEnvironmentIds = () =>
   request<string[]>("/dashboard/environments");
+
+function artifactScope(
+  range: DateRange,
+  userEmails?: string[],
+  environmentIds?: string[],
+  interfaceNames?: string[],
+): string {
+  const params = new URLSearchParams({ from: range.from, to: range.to });
+  (userEmails ?? []).forEach((email) => params.append("user_email", email));
+  (environmentIds ?? []).forEach((id) => params.append("environment", id));
+  (interfaceNames ?? []).forEach((iface) => params.append("interface_name", iface));
+  return params.toString();
+}
+
+export const fetchArtifacts = (
+  range: DateRange,
+  userEmails?: string[],
+  environmentIds?: string[],
+  interfaceNames?: string[],
+) =>
+  request<ArtifactStats[]>(`/dashboard/artifacts?${artifactScope(range, userEmails, environmentIds, interfaceNames)}`);
+
+export const fetchInterfaces = () => request<string[]>("/dashboard/interfaces");

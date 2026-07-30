@@ -1,13 +1,18 @@
 import { useEffect, useMemo, useState } from "react";
 import {
+  fetchCreatedEvents,
   fetchDaily,
   fetchEnvironmentIds,
+  fetchExecutedEvents,
   fetchSummary,
   fetchUserEmails,
   fetchUsers,
   UnauthorizedError,
 } from "./api";
+import ArtifactsPanel from "./components/ArtifactsPanel";
+import CreatedEventsTable from "./components/CreatedEventsTable";
 import DailyTrend from "./components/DailyTrend";
+import ExecutedEventsTable from "./components/ExecutedEventsTable";
 import Filters, { presetRange, type Preset } from "./components/Filters";
 import PassFailPie from "./components/PassFailPie";
 import PassRateMeter from "./components/PassRateMeter";
@@ -15,7 +20,15 @@ import StatTile from "./components/StatTile";
 import ThemeToggle from "./components/ThemeToggle";
 import UsersTable from "./components/UsersTable";
 import type { Theme } from "./theme";
-import { METRICS, type DailyStats, type DateRange, type StatsSummary, type UserStats } from "./types";
+import {
+  METRICS,
+  type CreatedEventDetail,
+  type DailyStats,
+  type DateRange,
+  type ExecutedEventDetail,
+  type StatsSummary,
+  type UserStats,
+} from "./types";
 import { fuzzyMatch } from "./fuzzy";
 
 const MIN_SEARCH_LEN = 2;
@@ -95,6 +108,8 @@ export default function Dashboard({
   const [serverSummary, setServerSummary] = useState<StatsSummary | null>(null);
   const [serverDaily, setServerDaily] = useState<DailyStats[]>([]);
   const [rawUsers, setRawUsers] = useState<UserStats[]>([]);
+  const [rawCreatedEvents, setRawCreatedEvents] = useState<CreatedEventDetail[]>([]);
+  const [rawExecutedEvents, setRawExecutedEvents] = useState<ExecutedEventDetail[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -124,14 +139,18 @@ export default function Dashboard({
       fetchSummary(range, scopedUser, scopedEnvironment),
       fetchDaily(range, scopedUser, scopedEnvironment),
       fetchUsers(range, scopedUser, scopedEnvironment),
+      fetchCreatedEvents(range, scopedUser, scopedEnvironment),
+      fetchExecutedEvents(range, scopedUser, scopedEnvironment),
       fetchUserEmails(),
       fetchEnvironmentIds(),
     ])
-      .then(([s, d, u, emails, envIds]) => {
+      .then(([s, d, u, created, executed, emails, envIds]) => {
         if (cancelled) return;
         setServerSummary(s);
         setServerDaily(d);
         setRawUsers(u);
+        setRawCreatedEvents(created);
+        setRawExecutedEvents(executed);
         setUserEmails(emails);
         setEnvironmentIds(envIds);
         setError(null);
@@ -154,6 +173,20 @@ export default function Dashboard({
         ? rawUsers.filter((r) => fuzzyMatch(debouncedSearch, r.environment))
         : rawUsers,
     [rawUsers, searchActive, debouncedSearch],
+  );
+  const createdEvents = useMemo(
+    () =>
+      searchActive
+        ? rawCreatedEvents.filter((r) => fuzzyMatch(debouncedSearch, r.environment))
+        : rawCreatedEvents,
+    [rawCreatedEvents, searchActive, debouncedSearch],
+  );
+  const executedEvents = useMemo(
+    () =>
+      searchActive
+        ? rawExecutedEvents.filter((r) => fuzzyMatch(debouncedSearch, r.environment))
+        : rawExecutedEvents,
+    [rawExecutedEvents, searchActive, debouncedSearch],
   );
   const summary = searchActive ? summarizeRows(users) : serverSummary;
   const daily = searchActive ? dailyFromRows(users) : serverDaily;
@@ -234,6 +267,15 @@ export default function Dashboard({
         </div>
         <DailyTrend data={filled} />
         <UsersTable rows={users} range={range} />
+        <CreatedEventsTable rows={createdEvents} range={range} />
+        <ExecutedEventsTable rows={executedEvents} range={range} />
+        <ArtifactsPanel
+          range={range}
+          userEmails={scopedUser}
+          environment={scopedEnvironment}
+          searchActive={searchActive}
+          searchTerm={debouncedSearch}
+        />
       </main>
     </>
   );

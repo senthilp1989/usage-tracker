@@ -1,16 +1,25 @@
 import hmac
-from datetime import date, datetime, timezone
-from typing import List, Optional
+from datetime import date, datetime, time, timedelta, timezone
+from typing import List, Optional, Tuple
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import func
+from sqlalchemy import func, select, union
 from sqlalchemy.orm import Session
 
 from ..auth import create_dashboard_token, verify_dashboard_token
 from ..config import settings
 from ..database import get_db
-from ..models import UsageReport
-from ..schemas import DailyStats, LoginIn, LoginOut, StatsSummary, UserStats
+from ..models import DocumentGeneratedEvent, TestCaseCreatedEvent, TestCaseExecutedEvent
+from ..schemas import (
+    ArtifactStats,
+    CreatedEventDetail,
+    DailyStats,
+    ExecutedEventDetail,
+    LoginIn,
+    LoginOut,
+    StatsSummary,
+    UserStats,
+)
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 
@@ -25,29 +34,39 @@ def login(payload: LoginIn) -> LoginOut:
     return LoginOut(token=token, expires_at=datetime.fromtimestamp(expires, tz=timezone.utc))
 
 
+def _range_bounds(date_from: date, date_to: date) -> Tuple[datetime, datetime]:
+    # Half-open [start, end) timestamp range from two IST calendar dates -
+    # matched directly against created_at with no function wrapping the
+    # column, so the plain index on created_at stays usable as row counts
+    # grow. created_at is already naive IST wall-clock (see models.py), so
+    # these bounds line up with it with no timezone conversion needed.
+    start = datetime.combine(date_from, time.min)
+    end = datetime.combine(date_to + timedelta(days=1), time.min)
+    return start, end
+
+
 def _scoped(
     query,
+    model,
     date_from: date,
     date_to: date,
     user_email: Optional[List[str]],
     environment: Optional[List[str]] = None,
 ):
-    query = query.filter(UsageReport.report_date >= date_from, UsageReport.report_date <= date_to)
+    # All filtering (date range, user, environment - and, on /artifacts,
+    # interface) happens here as SQL WHERE clauses, never in Python after
+    # the fact.
+    start, end = _range_bounds(date_from, date_to)
+    query = query.filter(model.created_at >= start, model.created_at < end)
     if user_email:
-        query = query.filter(UsageReport.user_email.in_(user_email))
+        query = query.filter(model.user_email.in_(user_email))
     if environment:
-        query = query.filter(UsageReport.environment.in_(environment))
+        query = query.filter(model.environment.in_(environment))
     return query
 
 
-def _totals():
-    return [
-        func.coalesce(func.sum(UsageReport.test_cases_created), 0).label("test_cases_created"),
-        func.coalesce(func.sum(UsageReport.test_cases_executed), 0).label("test_cases_executed"),
-        func.coalesce(func.sum(UsageReport.documents_generated), 0).label("documents_generated"),
-        func.coalesce(func.sum(UsageReport.test_cases_passed), 0).label("test_cases_passed"),
-        func.coalesce(func.sum(UsageReport.test_cases_failed), 0).label("test_cases_failed"),
-    ]
+def _day(col):
+    return func.date(col)
 
 
 @router.get("/summary", response_model=StatsSummary, dependencies=[Depends(verify_dashboard_token)])
@@ -58,18 +77,54 @@ def summary(
     environment: Optional[List[str]] = Query(default=None),
     db: Session = Depends(get_db),
 ) -> StatsSummary:
-    row = _scoped(
-        db.query(func.count(func.distinct(UsageReport.user_email)).label("users"), *_totals()),
-        date_from, date_to, user_email, environment,
+    created_count = _scoped(
+        db.query(func.count(TestCaseCreatedEvent.id)), TestCaseCreatedEvent, date_from, date_to, user_email, environment
+    ).scalar() or 0
+
+    executed_row = _scoped(
+        db.query(
+            func.count(TestCaseExecutedEvent.id).label("executed"),
+            func.count(TestCaseExecutedEvent.id).filter(TestCaseExecutedEvent.status == "PASSED").label("passed"),
+            func.count(TestCaseExecutedEvent.id).filter(TestCaseExecutedEvent.status == "FAILED").label("failed"),
+        ),
+        TestCaseExecutedEvent, date_from, date_to, user_email, environment,
     ).one()
+
+    documents_count = _scoped(
+        db.query(func.count(DocumentGeneratedEvent.id)),
+        DocumentGeneratedEvent, date_from, date_to, user_email, environment,
+    ).scalar() or 0
+
+    users_reporting = _distinct_user_count(db, date_from, date_to, user_email, environment)
+
     return StatsSummary(
-        users_reporting=row.users,
-        test_cases_created=row.test_cases_created,
-        test_cases_executed=row.test_cases_executed,
-        documents_generated=row.documents_generated,
-        test_cases_passed=row.test_cases_passed,
-        test_cases_failed=row.test_cases_failed,
+        users_reporting=users_reporting,
+        test_cases_created=created_count,
+        test_cases_executed=executed_row.executed or 0,
+        documents_generated=documents_count,
+        test_cases_passed=executed_row.passed or 0,
+        test_cases_failed=executed_row.failed or 0,
     )
+
+
+def _distinct_user_count(
+    db: Session,
+    date_from: date,
+    date_to: date,
+    user_email: Optional[List[str]],
+    environment: Optional[List[str]],
+) -> int:
+    start, end = _range_bounds(date_from, date_to)
+    parts = []
+    for model in (TestCaseCreatedEvent, TestCaseExecutedEvent, DocumentGeneratedEvent):
+        part = select(model.user_email).where(model.created_at >= start, model.created_at < end)
+        if user_email:
+            part = part.where(model.user_email.in_(user_email))
+        if environment:
+            part = part.where(model.environment.in_(environment))
+        parts.append(part)
+    combined = union(*parts).subquery()
+    return db.execute(select(func.count(func.distinct(combined.c.user_email)))).scalar() or 0
 
 
 @router.get("/daily", response_model=List[DailyStats], dependencies=[Depends(verify_dashboard_token)])
@@ -80,24 +135,56 @@ def daily(
     environment: Optional[List[str]] = Query(default=None),
     db: Session = Depends(get_db),
 ) -> List[DailyStats]:
-    day = UsageReport.report_date.label("day")
-    rows = (
-        _scoped(db.query(day, *_totals()), date_from, date_to, user_email, environment)
-        .group_by(day)
-        .order_by(day)
-        .all()
-    )
-    return [
-        DailyStats(
-            day=r.day,
-            test_cases_created=r.test_cases_created,
-            test_cases_executed=r.test_cases_executed,
-            documents_generated=r.documents_generated,
-            test_cases_passed=r.test_cases_passed,
-            test_cases_failed=r.test_cases_failed,
+    created_rows = _scoped(
+        db.query(_day(TestCaseCreatedEvent.created_at).label("day"), func.count(TestCaseCreatedEvent.id).label("count")),
+        TestCaseCreatedEvent, date_from, date_to, user_email, environment,
+    ).group_by("day").all()
+
+    executed_rows = _scoped(
+        db.query(
+            _day(TestCaseExecutedEvent.created_at).label("day"),
+            func.count(TestCaseExecutedEvent.id).label("executed"),
+            func.count(TestCaseExecutedEvent.id).filter(TestCaseExecutedEvent.status == "PASSED").label("passed"),
+            func.count(TestCaseExecutedEvent.id).filter(TestCaseExecutedEvent.status == "FAILED").label("failed"),
+        ),
+        TestCaseExecutedEvent, date_from, date_to, user_email, environment,
+    ).group_by("day").all()
+
+    document_rows = _scoped(
+        db.query(_day(DocumentGeneratedEvent.created_at).label("day"), func.count(DocumentGeneratedEvent.id).label("count")),
+        DocumentGeneratedEvent, date_from, date_to, user_email, environment,
+    ).group_by("day").all()
+
+    # Three already-filtered, already-aggregated result sets get combined
+    # into one row per day here - this is a join/reshape across sources
+    # (there's no single raw-event table to group by day directly), not a
+    # filtering step; every WHERE-clause condition already ran in Postgres
+    # above.
+    by_day: dict = {}
+
+    def _entry(day):
+        return by_day.setdefault(
+            day,
+            {
+                "test_cases_created": 0,
+                "test_cases_executed": 0,
+                "documents_generated": 0,
+                "test_cases_passed": 0,
+                "test_cases_failed": 0,
+            },
         )
-        for r in rows
-    ]
+
+    for r in created_rows:
+        _entry(r.day)["test_cases_created"] = r.count
+    for r in executed_rows:
+        entry = _entry(r.day)
+        entry["test_cases_executed"] = r.executed
+        entry["test_cases_passed"] = r.passed
+        entry["test_cases_failed"] = r.failed
+    for r in document_rows:
+        _entry(r.day)["documents_generated"] = r.count
+
+    return [DailyStats(day=day, **values) for day, values in sorted(by_day.items())]
 
 
 @router.get("/users", response_model=List[UserStats], dependencies=[Depends(verify_dashboard_token)])
@@ -108,45 +195,233 @@ def users(
     environment: Optional[List[str]] = Query(default=None),
     db: Session = Depends(get_db),
 ) -> List[UserStats]:
+    created_rows = _scoped(
+        db.query(
+            TestCaseCreatedEvent.user_email,
+            TestCaseCreatedEvent.environment,
+            _day(TestCaseCreatedEvent.created_at).label("report_date"),
+            func.count(TestCaseCreatedEvent.id).label("count"),
+            func.max(TestCaseCreatedEvent.reported_at).label("last_event_at"),
+        ),
+        TestCaseCreatedEvent, date_from, date_to, user_email, environment,
+    ).group_by(TestCaseCreatedEvent.user_email, TestCaseCreatedEvent.environment, "report_date").all()
+
+    executed_rows = _scoped(
+        db.query(
+            TestCaseExecutedEvent.user_email,
+            TestCaseExecutedEvent.environment,
+            _day(TestCaseExecutedEvent.created_at).label("report_date"),
+            func.count(TestCaseExecutedEvent.id).label("executed"),
+            func.count(TestCaseExecutedEvent.id).filter(TestCaseExecutedEvent.status == "PASSED").label("passed"),
+            func.count(TestCaseExecutedEvent.id).filter(TestCaseExecutedEvent.status == "FAILED").label("failed"),
+            func.max(TestCaseExecutedEvent.reported_at).label("last_event_at"),
+        ),
+        TestCaseExecutedEvent, date_from, date_to, user_email, environment,
+    ).group_by(TestCaseExecutedEvent.user_email, TestCaseExecutedEvent.environment, "report_date").all()
+
+    document_rows = _scoped(
+        db.query(
+            DocumentGeneratedEvent.user_email,
+            DocumentGeneratedEvent.environment,
+            _day(DocumentGeneratedEvent.created_at).label("report_date"),
+            func.count(DocumentGeneratedEvent.id).label("count"),
+            func.max(DocumentGeneratedEvent.reported_at).label("last_event_at"),
+        ),
+        DocumentGeneratedEvent, date_from, date_to, user_email, environment,
+    ).group_by(DocumentGeneratedEvent.user_email, DocumentGeneratedEvent.environment, "report_date").all()
+
+    by_key: dict = {}
+
+    def _entry(u, e, d):
+        return by_key.setdefault(
+            (u, e, d),
+            {
+                "user_email": u,
+                "environment": e,
+                "report_date": d,
+                "test_cases_created": 0,
+                "test_cases_executed": 0,
+                "documents_generated": 0,
+                "test_cases_passed": 0,
+                "test_cases_failed": 0,
+                "last_event_at": None,
+            },
+        )
+
+    def _bump_last(entry, candidate):
+        if candidate and (entry["last_event_at"] is None or candidate > entry["last_event_at"]):
+            entry["last_event_at"] = candidate
+
+    for r in created_rows:
+        entry = _entry(r.user_email, r.environment, r.report_date)
+        entry["test_cases_created"] = r.count
+        _bump_last(entry, r.last_event_at)
+    for r in executed_rows:
+        entry = _entry(r.user_email, r.environment, r.report_date)
+        entry["test_cases_executed"] = r.executed
+        entry["test_cases_passed"] = r.passed
+        entry["test_cases_failed"] = r.failed
+        _bump_last(entry, r.last_event_at)
+    for r in document_rows:
+        entry = _entry(r.user_email, r.environment, r.report_date)
+        entry["documents_generated"] = r.count
+        _bump_last(entry, r.last_event_at)
+
+    return [
+        UserStats(**values)
+        for values in sorted(by_key.values(), key=lambda v: (v["user_email"], v["environment"], v["report_date"]))
+    ]
+
+
+@router.get("/artifacts", response_model=List[ArtifactStats], dependencies=[Depends(verify_dashboard_token)])
+def artifacts(
+    date_from: date = Query(alias="from"),
+    date_to: date = Query(alias="to"),
+    user_email: Optional[List[str]] = Query(default=None),
+    environment: Optional[List[str]] = Query(default=None),
+    interface_name: Optional[List[str]] = Query(default=None),
+    db: Session = Depends(get_db),
+) -> List[ArtifactStats]:
+    def _artifact_scoped(query, model):
+        query = _scoped(query, model, date_from, date_to, user_email, environment)
+        if interface_name:
+            query = query.filter(model.interface_name.in_(interface_name))
+        return query
+
+    created_rows = _artifact_scoped(
+        db.query(
+            TestCaseCreatedEvent.environment,
+            TestCaseCreatedEvent.interface_name,
+            func.count(TestCaseCreatedEvent.id).label("count"),
+        ),
+        TestCaseCreatedEvent,
+    ).group_by(TestCaseCreatedEvent.environment, TestCaseCreatedEvent.interface_name).all()
+
+    executed_rows = _artifact_scoped(
+        db.query(
+            TestCaseExecutedEvent.environment,
+            TestCaseExecutedEvent.interface_name,
+            func.count(TestCaseExecutedEvent.id).label("count"),
+        ),
+        TestCaseExecutedEvent,
+    ).group_by(TestCaseExecutedEvent.environment, TestCaseExecutedEvent.interface_name).all()
+
+    document_rows = _artifact_scoped(
+        db.query(
+            DocumentGeneratedEvent.environment,
+            DocumentGeneratedEvent.interface_name,
+            func.count(DocumentGeneratedEvent.id).label("count"),
+        ),
+        DocumentGeneratedEvent,
+    ).group_by(DocumentGeneratedEvent.environment, DocumentGeneratedEvent.interface_name).all()
+
+    by_key: dict = {}
+
+    def _entry(env, iface):
+        return by_key.setdefault(
+            (env, iface),
+            {
+                "environment": env,
+                "interface_name": iface,
+                "test_cases_created": 0,
+                "test_cases_executed": 0,
+                "documents_generated": 0,
+            },
+        )
+
+    for r in created_rows:
+        _entry(r.environment, r.interface_name)["test_cases_created"] = r.count
+    for r in executed_rows:
+        _entry(r.environment, r.interface_name)["test_cases_executed"] = r.count
+    for r in document_rows:
+        _entry(r.environment, r.interface_name)["documents_generated"] = r.count
+
+    return [
+        ArtifactStats(**values)
+        for values in sorted(by_key.values(), key=lambda v: (v["environment"], v["interface_name"]))
+    ]
+
+
+@router.get("/created-events", response_model=List[CreatedEventDetail], dependencies=[Depends(verify_dashboard_token)])
+def created_events(
+    date_from: date = Query(alias="from"),
+    date_to: date = Query(alias="to"),
+    user_email: Optional[List[str]] = Query(default=None),
+    environment: Optional[List[str]] = Query(default=None),
+    db: Session = Depends(get_db),
+) -> List[CreatedEventDetail]:
     rows = (
         _scoped(
             db.query(
-                UsageReport.user_email,
-                UsageReport.environment,
-                UsageReport.report_date,
-                *_totals(),
-                func.max(UsageReport.reported_at).label("last_event_at"),
+                TestCaseCreatedEvent.user_email,
+                TestCaseCreatedEvent.environment,
+                TestCaseCreatedEvent.interface_name,
+                TestCaseCreatedEvent.test_case_name,
+                TestCaseCreatedEvent.created_at,
             ),
-            date_from, date_to, user_email, environment,
+            TestCaseCreatedEvent, date_from, date_to, user_email, environment,
         )
-        .group_by(UsageReport.user_email, UsageReport.environment, UsageReport.report_date)
-        .order_by(UsageReport.user_email, UsageReport.environment, UsageReport.report_date)
+        .order_by(TestCaseCreatedEvent.created_at.desc())
         .all()
     )
-    return [
-        UserStats(
-            user_email=r.user_email,
-            environment=r.environment,
-            report_date=r.report_date,
-            test_cases_created=r.test_cases_created,
-            test_cases_executed=r.test_cases_executed,
-            documents_generated=r.documents_generated,
-            test_cases_passed=r.test_cases_passed,
-            test_cases_failed=r.test_cases_failed,
-            last_event_at=r.last_event_at,
+    return [CreatedEventDetail(**r._mapping) for r in rows]
+
+
+@router.get(
+    "/executed-events", response_model=List[ExecutedEventDetail], dependencies=[Depends(verify_dashboard_token)]
+)
+def executed_events(
+    date_from: date = Query(alias="from"),
+    date_to: date = Query(alias="to"),
+    user_email: Optional[List[str]] = Query(default=None),
+    environment: Optional[List[str]] = Query(default=None),
+    db: Session = Depends(get_db),
+) -> List[ExecutedEventDetail]:
+    rows = (
+        _scoped(
+            db.query(
+                TestCaseExecutedEvent.user_email,
+                TestCaseExecutedEvent.environment,
+                TestCaseExecutedEvent.interface_name,
+                TestCaseExecutedEvent.test_case_name,
+                TestCaseExecutedEvent.status,
+                TestCaseExecutedEvent.created_at,
+            ),
+            TestCaseExecutedEvent, date_from, date_to, user_email, environment,
         )
-        for r in rows
-    ]
+        .order_by(TestCaseExecutedEvent.created_at.desc())
+        .all()
+    )
+    return [ExecutedEventDetail(**r._mapping) for r in rows]
 
 
 @router.get("/user-emails", response_model=List[str], dependencies=[Depends(verify_dashboard_token)])
 def user_emails(db: Session = Depends(get_db)) -> List[str]:
-    return [r[0] for r in db.query(UsageReport.user_email).distinct().order_by(UsageReport.user_email).all()]
+    combined = union(
+        select(TestCaseCreatedEvent.user_email),
+        select(TestCaseExecutedEvent.user_email),
+        select(DocumentGeneratedEvent.user_email),
+    ).subquery()
+    rows = db.execute(select(combined.c.user_email).distinct().order_by(combined.c.user_email)).all()
+    return [r[0] for r in rows]
 
 
 @router.get("/environments", response_model=List[str], dependencies=[Depends(verify_dashboard_token)])
 def environments(db: Session = Depends(get_db)) -> List[str]:
-    return [
-        r[0]
-        for r in db.query(UsageReport.environment).distinct().order_by(UsageReport.environment).all()
-    ]
+    combined = union(
+        select(TestCaseCreatedEvent.environment),
+        select(TestCaseExecutedEvent.environment),
+        select(DocumentGeneratedEvent.environment),
+    ).subquery()
+    rows = db.execute(select(combined.c.environment).distinct().order_by(combined.c.environment)).all()
+    return [r[0] for r in rows]
+
+
+@router.get("/interfaces", response_model=List[str], dependencies=[Depends(verify_dashboard_token)])
+def interfaces(db: Session = Depends(get_db)) -> List[str]:
+    combined = union(
+        select(TestCaseCreatedEvent.interface_name),
+        select(TestCaseExecutedEvent.interface_name),
+    ).subquery()
+    rows = db.execute(select(combined.c.interface_name).distinct().order_by(combined.c.interface_name)).all()
+    return [r[0] for r in rows]
