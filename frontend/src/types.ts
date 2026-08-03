@@ -3,8 +3,6 @@ export interface StatsSummary {
   test_cases_created: number;
   test_cases_executed: number;
   documents_generated: number;
-  test_cases_passed: number;
-  test_cases_failed: number;
 }
 
 export interface DailyStats {
@@ -12,8 +10,6 @@ export interface DailyStats {
   test_cases_created: number;
   test_cases_executed: number;
   documents_generated: number;
-  test_cases_passed: number;
-  test_cases_failed: number;
 }
 
 export interface UserStats {
@@ -23,8 +19,6 @@ export interface UserStats {
   test_cases_created: number;
   test_cases_executed: number;
   documents_generated: number;
-  test_cases_passed: number;
-  test_cases_failed: number;
   last_event_at: string;
 }
 
@@ -49,7 +43,6 @@ export interface ExecutedEventDetail {
   environment: string;
   interface_name: string;
   test_case_name: string;
-  status: string;
   created_at: string;
 }
 
@@ -62,12 +55,8 @@ export const METRICS = [
   { key: "test_cases_created", label: "Test cases created" },
   { key: "test_cases_executed", label: "Test cases executed" },
   { key: "documents_generated", label: "Documents generated" },
-  { key: "test_cases_passed", label: "Test cases passed" },
-  { key: "test_cases_failed", label: "Test cases failed" },
 ] as const;
 
 export type MetricKey = (typeof METRICS)[number]["key"];
 
-// Daily Activity trend chart/table intentionally shows only the original three -
-// Passed/Failed are visualized separately (pie + pass-rate meter), not as trend lines.
-export const TREND_METRICS = METRICS.slice(0, 3);
+export const TREND_METRICS = METRICS;

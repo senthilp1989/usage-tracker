@@ -9,9 +9,9 @@ function csvEscape(value: string | number): string {
 }
 
 function toCsv(rows: ExecutedEventDetail[]): string {
-  const headers = ["Email", "Environment", "Interface", "Test case", "Status"];
+  const headers = ["Email", "Environment", "Interface", "Test case"];
   const lines = rows.map((r) =>
-    [r.user_email, r.environment, r.interface_name, r.test_case_name, r.status].map(csvEscape).join(","),
+    [r.user_email, r.environment, r.interface_name, r.test_case_name].map(csvEscape).join(","),
   );
   return [headers.join(","), ...lines].join("\n");
 }
@@ -68,7 +68,6 @@ export default function ExecutedEventsTable({ rows, range }: { rows: ExecutedEve
                   <th>Environment</th>
                   <th>Interface</th>
                   <th>Test case</th>
-                  <th>Status</th>
                 </tr>
               </thead>
               <tbody>
@@ -78,7 +77,6 @@ export default function ExecutedEventsTable({ rows, range }: { rows: ExecutedEve
                     <td>{r.environment}</td>
                     <td>{r.interface_name}</td>
                     <td>{r.test_case_name}</td>
-                    <td>{r.status}</td>
                   </tr>
                 ))}
               </tbody>

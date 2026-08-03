@@ -101,8 +101,6 @@ class StatsSummary(BaseModel):
     test_cases_created: int
     test_cases_executed: int
     documents_generated: int
-    test_cases_passed: int
-    test_cases_failed: int
 
 
 class DailyStats(BaseModel):
@@ -110,8 +108,6 @@ class DailyStats(BaseModel):
     test_cases_created: int
     test_cases_executed: int
     documents_generated: int
-    test_cases_passed: int
-    test_cases_failed: int
 
 
 class UserStats(BaseModel):
@@ -121,8 +117,6 @@ class UserStats(BaseModel):
     test_cases_created: int
     test_cases_executed: int
     documents_generated: int
-    test_cases_passed: int
-    test_cases_failed: int
     last_event_at: datetime
 
 
@@ -147,5 +141,4 @@ class ExecutedEventDetail(BaseModel):
     environment: str
     interface_name: str
     test_case_name: str
-    status: str
     created_at: datetime

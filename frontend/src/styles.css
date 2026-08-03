@@ -292,65 +292,6 @@ button.primary {
   line-height: 1.1;
 }
 
-/* Pass/fail pie + pass-rate meter row */
-.pie-row {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-  gap: 16px;
-}
-
-.pie-chart-wrap {
-  display: flex;
-  align-items: center;
-  gap: 24px;
-  flex-wrap: wrap;
-}
-
-.pie-legend {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  list-style: none;
-  margin: 0;
-  padding: 0;
-}
-
-.pie-legend-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 13px;
-  color: var(--text-secondary);
-}
-
-.pie-legend-swatch {
-  width: 10px;
-  height: 10px;
-  border-radius: 2px;
-  flex: none;
-}
-
-.pie-legend-item strong {
-  color: var(--text-primary);
-  font-variant-numeric: tabular-nums;
-  margin-left: auto;
-  padding-left: 16px;
-}
-
-.meter-wrap {
-  position: relative;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.meter-value {
-  position: absolute;
-  font-size: 28px;
-  font-weight: 600;
-  color: var(--text-primary);
-}
-
 /* Chart */
 .chart-wrap {
   position: relative;

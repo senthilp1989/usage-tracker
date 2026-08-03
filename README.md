@@ -74,7 +74,7 @@ curl -X POST http://localhost:8000/events \
 
 Sign in at the frontend port. The dashboard shows, scoped by a date-range preset (today / 7 / 30 / 90 days / custom) and optional user and environment filters:
 
-- KPI tiles: users reporting, and totals for each metric (test cases created/executed, documents generated, passed/failed)
+- KPI tiles: users reporting, and totals for each metric (test cases created/executed, documents generated)
 - Daily activity chart (with a table view toggle and hover tooltips)
 - Usage-by-user table: one row per (user, environment, report date) with that day's metrics and last-activity timestamp — not a rolled-up total
 - Usage-by-interface table: independently filterable by interface, showing test cases created/executed per interface

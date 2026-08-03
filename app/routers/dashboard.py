@@ -81,14 +81,10 @@ def summary(
         db.query(func.count(TestCaseCreatedEvent.id)), TestCaseCreatedEvent, date_from, date_to, user_email, environment
     ).scalar() or 0
 
-    executed_row = _scoped(
-        db.query(
-            func.count(TestCaseExecutedEvent.id).label("executed"),
-            func.count(TestCaseExecutedEvent.id).filter(TestCaseExecutedEvent.status == "PASSED").label("passed"),
-            func.count(TestCaseExecutedEvent.id).filter(TestCaseExecutedEvent.status == "FAILED").label("failed"),
-        ),
+    executed_count = _scoped(
+        db.query(func.count(TestCaseExecutedEvent.id)),
         TestCaseExecutedEvent, date_from, date_to, user_email, environment,
-    ).one()
+    ).scalar() or 0
 
     documents_count = _scoped(
         db.query(func.count(DocumentGeneratedEvent.id)),
@@ -100,10 +96,8 @@ def summary(
     return StatsSummary(
         users_reporting=users_reporting,
         test_cases_created=created_count,
-        test_cases_executed=executed_row.executed or 0,
+        test_cases_executed=executed_count,
         documents_generated=documents_count,
-        test_cases_passed=executed_row.passed or 0,
-        test_cases_failed=executed_row.failed or 0,
     )
 
 
@@ -143,9 +137,7 @@ def daily(
     executed_rows = _scoped(
         db.query(
             _day(TestCaseExecutedEvent.created_at).label("day"),
-            func.count(TestCaseExecutedEvent.id).label("executed"),
-            func.count(TestCaseExecutedEvent.id).filter(TestCaseExecutedEvent.status == "PASSED").label("passed"),
-            func.count(TestCaseExecutedEvent.id).filter(TestCaseExecutedEvent.status == "FAILED").label("failed"),
+            func.count(TestCaseExecutedEvent.id).label("count"),
         ),
         TestCaseExecutedEvent, date_from, date_to, user_email, environment,
     ).group_by("day").all()
@@ -169,18 +161,13 @@ def daily(
                 "test_cases_created": 0,
                 "test_cases_executed": 0,
                 "documents_generated": 0,
-                "test_cases_passed": 0,
-                "test_cases_failed": 0,
             },
         )
 
     for r in created_rows:
         _entry(r.day)["test_cases_created"] = r.count
     for r in executed_rows:
-        entry = _entry(r.day)
-        entry["test_cases_executed"] = r.executed
-        entry["test_cases_passed"] = r.passed
-        entry["test_cases_failed"] = r.failed
+        _entry(r.day)["test_cases_executed"] = r.count
     for r in document_rows:
         _entry(r.day)["documents_generated"] = r.count
 
@@ -212,8 +199,6 @@ def users(
             TestCaseExecutedEvent.environment,
             _day(TestCaseExecutedEvent.created_at).label("report_date"),
             func.count(TestCaseExecutedEvent.id).label("executed"),
-            func.count(TestCaseExecutedEvent.id).filter(TestCaseExecutedEvent.status == "PASSED").label("passed"),
-            func.count(TestCaseExecutedEvent.id).filter(TestCaseExecutedEvent.status == "FAILED").label("failed"),
             func.max(TestCaseExecutedEvent.reported_at).label("last_event_at"),
         ),
         TestCaseExecutedEvent, date_from, date_to, user_email, environment,
@@ -242,8 +227,6 @@ def users(
                 "test_cases_created": 0,
                 "test_cases_executed": 0,
                 "documents_generated": 0,
-                "test_cases_passed": 0,
-                "test_cases_failed": 0,
                 "last_event_at": None,
             },
         )
@@ -259,8 +242,6 @@ def users(
     for r in executed_rows:
         entry = _entry(r.user_email, r.environment, r.report_date)
         entry["test_cases_executed"] = r.executed
-        entry["test_cases_passed"] = r.passed
-        entry["test_cases_failed"] = r.failed
         _bump_last(entry, r.last_event_at)
     for r in document_rows:
         entry = _entry(r.user_email, r.environment, r.report_date)
@@ -384,7 +365,6 @@ def executed_events(
                 TestCaseExecutedEvent.environment,
                 TestCaseExecutedEvent.interface_name,
                 TestCaseExecutedEvent.test_case_name,
-                TestCaseExecutedEvent.status,
                 TestCaseExecutedEvent.created_at,
             ),
             TestCaseExecutedEvent, date_from, date_to, user_email, environment,

@@ -14,8 +14,6 @@ import CreatedEventsTable from "./components/CreatedEventsTable";
 import DailyTrend from "./components/DailyTrend";
 import ExecutedEventsTable from "./components/ExecutedEventsTable";
 import Filters, { presetRange, type Preset } from "./components/Filters";
-import PassFailPie from "./components/PassFailPie";
-import PassRateMeter from "./components/PassRateMeter";
 import StatTile from "./components/StatTile";
 import ThemeToggle from "./components/ThemeToggle";
 import UsersTable from "./components/UsersTable";
@@ -46,8 +44,6 @@ function zeroFill(range: DateRange, rows: DailyStats[]): DailyStats[] {
         test_cases_created: 0,
         test_cases_executed: 0,
         documents_generated: 0,
-        test_cases_passed: 0,
-        test_cases_failed: 0,
       },
     );
     cursor.setUTCDate(cursor.getUTCDate() + 1);
@@ -60,8 +56,6 @@ function summarizeRows(rows: UserStats[]): StatsSummary {
     test_cases_created: 0,
     test_cases_executed: 0,
     documents_generated: 0,
-    test_cases_passed: 0,
-    test_cases_failed: 0,
   };
   for (const row of rows) {
     for (const metric of METRICS) totals[metric.key] += row[metric.key];
@@ -77,8 +71,6 @@ function dailyFromRows(rows: UserStats[]): DailyStats[] {
       test_cases_created: 0,
       test_cases_executed: 0,
       documents_generated: 0,
-      test_cases_passed: 0,
-      test_cases_failed: 0,
     };
     for (const metric of METRICS) entry[metric.key] += row[metric.key];
     byDay.set(row.report_date, entry);
@@ -192,14 +184,6 @@ export default function Dashboard({
   const daily = searchActive ? dailyFromRows(users) : serverDaily;
   const searchHasNoMatches = searchActive && users.length === 0;
 
-  // "Test cases executed" here (and pass rate) are derived from passed+failed,
-  // not sent or stored as their own fields - QUEUED/RUNNING/STALED/CANCELLED runs
-  // are deliberately excluded. This is narrower than the underlying
-  // test_cases_executed field (still collected/sent, just no longer shown here),
-  // which counts every triggered execution regardless of terminal status.
-  const kpiExecutions = (summary?.test_cases_passed ?? 0) + (summary?.test_cases_failed ?? 0);
-  const kpiPassRate = kpiExecutions > 0 ? (summary!.test_cases_passed / kpiExecutions) * 100 : null;
-
   const filled = useMemo(() => zeroFill(range, daily), [range, daily]);
 
   return (
@@ -246,24 +230,10 @@ export default function Dashboard({
             label="Documents generated"
             value={summary?.documents_generated ?? 0}
           />
-          <StatTile label="Test cases executed" value={kpiExecutions} />
           <StatTile
-            label="Pass rate"
-            value={kpiPassRate ?? 0}
-            format={(n) => (kpiPassRate === null ? "—" : `${n.toFixed(1)}%`)}
+            label="Test cases executed"
+            value={summary?.test_cases_executed ?? 0}
           />
-          <StatTile
-            label="Test cases passed"
-            value={summary?.test_cases_passed ?? 0}
-          />
-          <StatTile
-            label="Test cases failed"
-            value={summary?.test_cases_failed ?? 0}
-          />
-        </div>
-        <div className="pie-row">
-          <PassFailPie passed={summary?.test_cases_passed ?? 0} failed={summary?.test_cases_failed ?? 0} />
-          <PassRateMeter passed={summary?.test_cases_passed ?? 0} failed={summary?.test_cases_failed ?? 0} />
         </div>
         <DailyTrend data={filled} />
         <UsersTable rows={users} range={range} />
