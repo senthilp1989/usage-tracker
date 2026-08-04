@@ -12,9 +12,23 @@ function csvEscape(value: string | number): string {
 }
 
 function toCsv(rows: ArtifactStats[]): string {
-  const headers = ["Environment", "Interface", "Test cases created", "Test cases executed", "Documents generated"];
+  const headers = [
+    "Environment",
+    "Interface",
+    "Test cases created",
+    "Test cases executed",
+    "Documents generated",
+    "Test case documents generated",
+  ];
   const lines = rows.map((r) =>
-    [r.environment, r.interface_name, r.test_cases_created, r.test_cases_executed, r.documents_generated]
+    [
+      r.environment,
+      r.interface_name,
+      r.test_cases_created,
+      r.test_cases_executed,
+      r.documents_generated,
+      r.test_case_documents_generated,
+    ]
       .map(csvEscape)
       .join(","),
   );
@@ -138,6 +152,7 @@ export default function ArtifactsPanel({
                     <th className="num">Test cases created</th>
                     <th className="num">Test cases executed</th>
                     <th className="num">Documents generated</th>
+                    <th className="num">Test case documents generated</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -148,6 +163,7 @@ export default function ArtifactsPanel({
                       <td className="num">{r.test_cases_created.toLocaleString()}</td>
                       <td className="num">{r.test_cases_executed.toLocaleString()}</td>
                       <td className="num">{r.documents_generated.toLocaleString()}</td>
+                      <td className="num">{r.test_case_documents_generated.toLocaleString()}</td>
                     </tr>
                   ))}
                 </tbody>

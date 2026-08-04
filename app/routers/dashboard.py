@@ -9,7 +9,12 @@ from sqlalchemy.orm import Session
 from ..auth import create_dashboard_token, verify_dashboard_token
 from ..config import settings
 from ..database import get_db
-from ..models import DocumentGeneratedEvent, TestCaseCreatedEvent, TestCaseExecutedEvent
+from ..models import (
+    DocumentGeneratedEvent,
+    TestCaseCreatedEvent,
+    TestCaseDocumentGeneratedEvent,
+    TestCaseExecutedEvent,
+)
 from ..schemas import (
     ArtifactStats,
     CreatedEventDetail,
@@ -18,6 +23,7 @@ from ..schemas import (
     LoginIn,
     LoginOut,
     StatsSummary,
+    TestCaseDocumentEventDetail,
     UserStats,
 )
 
@@ -91,6 +97,11 @@ def summary(
         DocumentGeneratedEvent, date_from, date_to, user_email, environment,
     ).scalar() or 0
 
+    test_case_documents_count = _scoped(
+        db.query(func.count(TestCaseDocumentGeneratedEvent.id)),
+        TestCaseDocumentGeneratedEvent, date_from, date_to, user_email, environment,
+    ).scalar() or 0
+
     users_reporting = _distinct_user_count(db, date_from, date_to, user_email, environment)
 
     return StatsSummary(
@@ -98,6 +109,7 @@ def summary(
         test_cases_created=created_count,
         test_cases_executed=executed_count,
         documents_generated=documents_count,
+        test_case_documents_generated=test_case_documents_count,
     )
 
 
@@ -110,7 +122,7 @@ def _distinct_user_count(
 ) -> int:
     start, end = _range_bounds(date_from, date_to)
     parts = []
-    for model in (TestCaseCreatedEvent, TestCaseExecutedEvent, DocumentGeneratedEvent):
+    for model in (TestCaseCreatedEvent, TestCaseExecutedEvent, DocumentGeneratedEvent, TestCaseDocumentGeneratedEvent):
         part = select(model.user_email).where(model.created_at >= start, model.created_at < end)
         if user_email:
             part = part.where(model.user_email.in_(user_email))
@@ -147,7 +159,15 @@ def daily(
         DocumentGeneratedEvent, date_from, date_to, user_email, environment,
     ).group_by("day").all()
 
-    # Three already-filtered, already-aggregated result sets get combined
+    test_case_document_rows = _scoped(
+        db.query(
+            _day(TestCaseDocumentGeneratedEvent.created_at).label("day"),
+            func.count(TestCaseDocumentGeneratedEvent.id).label("count"),
+        ),
+        TestCaseDocumentGeneratedEvent, date_from, date_to, user_email, environment,
+    ).group_by("day").all()
+
+    # Four already-filtered, already-aggregated result sets get combined
     # into one row per day here - this is a join/reshape across sources
     # (there's no single raw-event table to group by day directly), not a
     # filtering step; every WHERE-clause condition already ran in Postgres
@@ -161,6 +181,7 @@ def daily(
                 "test_cases_created": 0,
                 "test_cases_executed": 0,
                 "documents_generated": 0,
+                "test_case_documents_generated": 0,
             },
         )
 
@@ -170,6 +191,8 @@ def daily(
         _entry(r.day)["test_cases_executed"] = r.count
     for r in document_rows:
         _entry(r.day)["documents_generated"] = r.count
+    for r in test_case_document_rows:
+        _entry(r.day)["test_case_documents_generated"] = r.count
 
     return [DailyStats(day=day, **values) for day, values in sorted(by_day.items())]
 
@@ -215,6 +238,17 @@ def users(
         DocumentGeneratedEvent, date_from, date_to, user_email, environment,
     ).group_by(DocumentGeneratedEvent.user_email, DocumentGeneratedEvent.environment, "report_date").all()
 
+    test_case_document_rows = _scoped(
+        db.query(
+            TestCaseDocumentGeneratedEvent.user_email,
+            TestCaseDocumentGeneratedEvent.environment,
+            _day(TestCaseDocumentGeneratedEvent.created_at).label("report_date"),
+            func.count(TestCaseDocumentGeneratedEvent.id).label("count"),
+            func.max(TestCaseDocumentGeneratedEvent.reported_at).label("last_event_at"),
+        ),
+        TestCaseDocumentGeneratedEvent, date_from, date_to, user_email, environment,
+    ).group_by(TestCaseDocumentGeneratedEvent.user_email, TestCaseDocumentGeneratedEvent.environment, "report_date").all()
+
     by_key: dict = {}
 
     def _entry(u, e, d):
@@ -227,6 +261,7 @@ def users(
                 "test_cases_created": 0,
                 "test_cases_executed": 0,
                 "documents_generated": 0,
+                "test_case_documents_generated": 0,
                 "last_event_at": None,
             },
         )
@@ -246,6 +281,10 @@ def users(
     for r in document_rows:
         entry = _entry(r.user_email, r.environment, r.report_date)
         entry["documents_generated"] = r.count
+        _bump_last(entry, r.last_event_at)
+    for r in test_case_document_rows:
+        entry = _entry(r.user_email, r.environment, r.report_date)
+        entry["test_case_documents_generated"] = r.count
         _bump_last(entry, r.last_event_at)
 
     return [
@@ -296,6 +335,15 @@ def artifacts(
         DocumentGeneratedEvent,
     ).group_by(DocumentGeneratedEvent.environment, DocumentGeneratedEvent.interface_name).all()
 
+    test_case_document_rows = _artifact_scoped(
+        db.query(
+            TestCaseDocumentGeneratedEvent.environment,
+            TestCaseDocumentGeneratedEvent.interface_name,
+            func.count(TestCaseDocumentGeneratedEvent.id).label("count"),
+        ),
+        TestCaseDocumentGeneratedEvent,
+    ).group_by(TestCaseDocumentGeneratedEvent.environment, TestCaseDocumentGeneratedEvent.interface_name).all()
+
     by_key: dict = {}
 
     def _entry(env, iface):
@@ -307,6 +355,7 @@ def artifacts(
                 "test_cases_created": 0,
                 "test_cases_executed": 0,
                 "documents_generated": 0,
+                "test_case_documents_generated": 0,
             },
         )
 
@@ -316,6 +365,8 @@ def artifacts(
         _entry(r.environment, r.interface_name)["test_cases_executed"] = r.count
     for r in document_rows:
         _entry(r.environment, r.interface_name)["documents_generated"] = r.count
+    for r in test_case_document_rows:
+        _entry(r.environment, r.interface_name)["test_case_documents_generated"] = r.count
 
     return [
         ArtifactStats(**values)
@@ -375,12 +426,44 @@ def executed_events(
     return [ExecutedEventDetail(**r._mapping) for r in rows]
 
 
+@router.get(
+    "/test-case-document-events",
+    response_model=List[TestCaseDocumentEventDetail],
+    dependencies=[Depends(verify_dashboard_token)],
+)
+def test_case_document_events(
+    date_from: date = Query(alias="from"),
+    date_to: date = Query(alias="to"),
+    user_email: Optional[List[str]] = Query(default=None),
+    environment: Optional[List[str]] = Query(default=None),
+    db: Session = Depends(get_db),
+) -> List[TestCaseDocumentEventDetail]:
+    rows = (
+        _scoped(
+            db.query(
+                TestCaseDocumentGeneratedEvent.user_email,
+                TestCaseDocumentGeneratedEvent.environment,
+                TestCaseDocumentGeneratedEvent.interface_name,
+                TestCaseDocumentGeneratedEvent.suite_name,
+                TestCaseDocumentGeneratedEvent.test_case_names,
+                TestCaseDocumentGeneratedEvent.test_case_count,
+                TestCaseDocumentGeneratedEvent.created_at,
+            ),
+            TestCaseDocumentGeneratedEvent, date_from, date_to, user_email, environment,
+        )
+        .order_by(TestCaseDocumentGeneratedEvent.created_at.desc())
+        .all()
+    )
+    return [TestCaseDocumentEventDetail(**r._mapping) for r in rows]
+
+
 @router.get("/user-emails", response_model=List[str], dependencies=[Depends(verify_dashboard_token)])
 def user_emails(db: Session = Depends(get_db)) -> List[str]:
     combined = union(
         select(TestCaseCreatedEvent.user_email),
         select(TestCaseExecutedEvent.user_email),
         select(DocumentGeneratedEvent.user_email),
+        select(TestCaseDocumentGeneratedEvent.user_email),
     ).subquery()
     rows = db.execute(select(combined.c.user_email).distinct().order_by(combined.c.user_email)).all()
     return [r[0] for r in rows]
@@ -392,6 +475,7 @@ def environments(db: Session = Depends(get_db)) -> List[str]:
         select(TestCaseCreatedEvent.environment),
         select(TestCaseExecutedEvent.environment),
         select(DocumentGeneratedEvent.environment),
+        select(TestCaseDocumentGeneratedEvent.environment),
     ).subquery()
     rows = db.execute(select(combined.c.environment).distinct().order_by(combined.c.environment)).all()
     return [r[0] for r in rows]

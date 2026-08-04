@@ -8,11 +8,17 @@ from sqlalchemy.orm import Session
 
 from ..auth import verify_api_key
 from ..database import get_db
-from ..models import DocumentGeneratedEvent, TestCaseCreatedEvent, TestCaseExecutedEvent
+from ..models import (
+    DocumentGeneratedEvent,
+    TestCaseCreatedEvent,
+    TestCaseDocumentGeneratedEvent,
+    TestCaseExecutedEvent,
+)
 from ..schemas import (
     DocumentGeneratedEventIn,
     RejectedEvent,
     TestCaseCreatedEventIn,
+    TestCaseDocumentGeneratedEventIn,
     TestCaseExecutedEventIn,
     UsageEventsAccepted,
 )
@@ -53,6 +59,11 @@ def ingest_events(payload: Dict[str, Any], db: Session = Depends(get_db)) -> Usa
     documents_valid, documents_rejected = _validate_each(
         "documents_generated", payload.get("documents_generated"), DocumentGeneratedEventIn
     )
+    test_case_documents_valid, test_case_documents_rejected = _validate_each(
+        "test_case_documents_generated",
+        payload.get("test_case_documents_generated"),
+        TestCaseDocumentGeneratedEventIn,
+    )
 
     # Plain inserts, not upserts - these are immutable, append-only events.
     # ON CONFLICT DO NOTHING is only a backstop against the source tool
@@ -76,9 +87,15 @@ def ingest_events(payload: Dict[str, Any], db: Session = Depends(get_db)) -> Usa
             .values([item.model_dump() for item in documents_valid])
             .on_conflict_do_nothing(constraint="uq_document_generated_events_natural_key")
         )
+    if test_case_documents_valid:
+        db.execute(
+            pg_insert(TestCaseDocumentGeneratedEvent)
+            .values([item.model_dump() for item in test_case_documents_valid])
+            .on_conflict_do_nothing(constraint="uq_test_case_document_generated_events_natural_key")
+        )
     db.commit()
 
-    rejected = created_rejected + executed_rejected + documents_rejected
+    rejected = created_rejected + executed_rejected + documents_rejected + test_case_documents_rejected
     for r in rejected:
         logger.warning("Rejected %s[%d]: %s", r.event_type, r.index, r.reason)
 
@@ -86,5 +103,6 @@ def ingest_events(payload: Dict[str, Any], db: Session = Depends(get_db)) -> Usa
         test_cases_created=len(created_valid),
         test_cases_executed=len(executed_valid),
         documents_generated=len(documents_valid),
+        test_case_documents_generated=len(test_case_documents_valid),
         rejected=rejected,
     )

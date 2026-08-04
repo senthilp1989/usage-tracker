@@ -1,4 +1,5 @@
 from sqlalchemy import Column, Date, DateTime, Integer, String, UniqueConstraint, func, text
+from sqlalchemy.dialects.postgresql import JSONB
 
 from .database import Base
 
@@ -104,5 +105,31 @@ class DocumentGeneratedEvent(Base):
     user_email = Column(String(255), nullable=False, index=True)
     environment = Column(String(255), nullable=False, index=True)
     interface_name = Column(String(255), nullable=False, index=True)
+    created_at = Column(DateTime(timezone=False), nullable=False, index=True)
+    reported_at = Column(DateTime(timezone=False), nullable=False, server_default=_IST_NOW)
+
+
+class TestCaseDocumentGeneratedEvent(Base):
+    """One row per "Generate Report" click on a test suite's consolidated test
+    execution document (Word/PDF), as reported by the source tool. Unlike the
+    other three event tables, `environment` and `interface_name` are nullable -
+    the source tool resolves them from the test suite at log time, and a suite
+    with no environment/interface assigned yet still needs to log the click."""
+
+    __tablename__ = "test_case_document_generated_events"
+    __table_args__ = (
+        UniqueConstraint(
+            "user_email", "environment", "interface_name", "suite_name", "created_at",
+            name="uq_test_case_document_generated_events_natural_key",
+        ),
+    )
+
+    id = Column(Integer, primary_key=True)
+    user_email = Column(String(255), nullable=False, index=True)
+    environment = Column(String(255), nullable=True, index=True)
+    interface_name = Column(String(255), nullable=True, index=True)
+    suite_name = Column(String(255), nullable=False, index=True)
+    test_case_names = Column(JSONB, nullable=False)
+    test_case_count = Column(Integer, nullable=False)
     created_at = Column(DateTime(timezone=False), nullable=False, index=True)
     reported_at = Column(DateTime(timezone=False), nullable=False, server_default=_IST_NOW)

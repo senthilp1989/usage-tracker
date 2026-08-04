@@ -1,5 +1,5 @@
 from datetime import date, datetime
-from typing import List
+from typing import List, Optional
 from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, EmailStr, field_serializer
@@ -73,10 +73,21 @@ class DocumentGeneratedEventIn(BaseModel):
     created_at: datetime
 
 
+class TestCaseDocumentGeneratedEventIn(BaseModel):
+    user_email: EmailStr
+    environment: str
+    interface_name: str
+    suite_name: str
+    test_case_names: List[str] = []
+    test_case_count: int
+    created_at: datetime
+
+
 class UsageEventsIn(BaseModel):
     test_cases_created: List[TestCaseCreatedEventIn] = []
     test_cases_executed: List[TestCaseExecutedEventIn] = []
     documents_generated: List[DocumentGeneratedEventIn] = []
+    test_case_documents_generated: List[TestCaseDocumentGeneratedEventIn] = []
 
 
 class RejectedEvent(BaseModel):
@@ -89,6 +100,7 @@ class UsageEventsAccepted(BaseModel):
     test_cases_created: int
     test_cases_executed: int
     documents_generated: int
+    test_case_documents_generated: int
     rejected: List[RejectedEvent] = []
 
 
@@ -101,6 +113,7 @@ class StatsSummary(BaseModel):
     test_cases_created: int
     test_cases_executed: int
     documents_generated: int
+    test_case_documents_generated: int
 
 
 class DailyStats(BaseModel):
@@ -108,6 +121,7 @@ class DailyStats(BaseModel):
     test_cases_created: int
     test_cases_executed: int
     documents_generated: int
+    test_case_documents_generated: int
 
 
 class UserStats(BaseModel):
@@ -117,6 +131,7 @@ class UserStats(BaseModel):
     test_cases_created: int
     test_cases_executed: int
     documents_generated: int
+    test_case_documents_generated: int
     last_event_at: datetime
 
 
@@ -126,6 +141,7 @@ class ArtifactStats(BaseModel):
     test_cases_created: int
     test_cases_executed: int
     documents_generated: int
+    test_case_documents_generated: int
 
 
 class CreatedEventDetail(BaseModel):
@@ -141,4 +157,14 @@ class ExecutedEventDetail(BaseModel):
     environment: str
     interface_name: str
     test_case_name: str
+    created_at: datetime
+
+
+class TestCaseDocumentEventDetail(BaseModel):
+    user_email: str
+    environment: Optional[str]
+    interface_name: Optional[str]
+    suite_name: str
+    test_case_names: List[str]
+    test_case_count: int
     created_at: datetime

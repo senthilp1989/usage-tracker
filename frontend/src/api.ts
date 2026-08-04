@@ -5,6 +5,7 @@ import type {
   DateRange,
   ExecutedEventDetail,
   StatsSummary,
+  TestCaseDocumentEventDetail,
   UserStats,
 } from "./types";
 
@@ -69,6 +70,11 @@ export const fetchCreatedEvents = (range: DateRange, userEmails?: string[], envi
 
 export const fetchExecutedEvents = (range: DateRange, userEmails?: string[], environmentIds?: string[]) =>
   request<ExecutedEventDetail[]>(`/dashboard/executed-events?${scope(range, userEmails, environmentIds)}`);
+
+export const fetchTestCaseDocumentEvents = (range: DateRange, userEmails?: string[], environmentIds?: string[]) =>
+  request<TestCaseDocumentEventDetail[]>(
+    `/dashboard/test-case-document-events?${scope(range, userEmails, environmentIds)}`,
+  );
 
 export const fetchUserEmails = () =>
   request<string[]>("/dashboard/user-emails");

@@ -17,6 +17,7 @@
   --series-1: #2a78d6; /* test cases created */
   --series-2: #1baf7a; /* test cases executed */
   --series-3: #eda100; /* documents generated */
+  --series-4: #e87ba4; /* test case documents generated */
 }
 
 :root[data-theme="dark"] {
@@ -35,6 +36,7 @@
   --series-1: #3987e5;
   --series-2: #199e70;
   --series-3: #c98500;
+  --series-4: #d55181;
 }
 
 * {

@@ -5,6 +5,7 @@ import {
   fetchEnvironmentIds,
   fetchExecutedEvents,
   fetchSummary,
+  fetchTestCaseDocumentEvents,
   fetchUserEmails,
   fetchUsers,
   UnauthorizedError,
@@ -15,6 +16,7 @@ import DailyTrend from "./components/DailyTrend";
 import ExecutedEventsTable from "./components/ExecutedEventsTable";
 import Filters, { presetRange, type Preset } from "./components/Filters";
 import StatTile from "./components/StatTile";
+import TestCaseDocumentEventsTable from "./components/TestCaseDocumentEventsTable";
 import ThemeToggle from "./components/ThemeToggle";
 import UsersTable from "./components/UsersTable";
 import type { Theme } from "./theme";
@@ -25,6 +27,7 @@ import {
   type DateRange,
   type ExecutedEventDetail,
   type StatsSummary,
+  type TestCaseDocumentEventDetail,
   type UserStats,
 } from "./types";
 import { fuzzyMatch } from "./fuzzy";
@@ -44,6 +47,7 @@ function zeroFill(range: DateRange, rows: DailyStats[]): DailyStats[] {
         test_cases_created: 0,
         test_cases_executed: 0,
         documents_generated: 0,
+        test_case_documents_generated: 0,
       },
     );
     cursor.setUTCDate(cursor.getUTCDate() + 1);
@@ -56,6 +60,7 @@ function summarizeRows(rows: UserStats[]): StatsSummary {
     test_cases_created: 0,
     test_cases_executed: 0,
     documents_generated: 0,
+    test_case_documents_generated: 0,
   };
   for (const row of rows) {
     for (const metric of METRICS) totals[metric.key] += row[metric.key];
@@ -71,6 +76,7 @@ function dailyFromRows(rows: UserStats[]): DailyStats[] {
       test_cases_created: 0,
       test_cases_executed: 0,
       documents_generated: 0,
+      test_case_documents_generated: 0,
     };
     for (const metric of METRICS) entry[metric.key] += row[metric.key];
     byDay.set(row.report_date, entry);
@@ -102,6 +108,7 @@ export default function Dashboard({
   const [rawUsers, setRawUsers] = useState<UserStats[]>([]);
   const [rawCreatedEvents, setRawCreatedEvents] = useState<CreatedEventDetail[]>([]);
   const [rawExecutedEvents, setRawExecutedEvents] = useState<ExecutedEventDetail[]>([]);
+  const [rawTestCaseDocumentEvents, setRawTestCaseDocumentEvents] = useState<TestCaseDocumentEventDetail[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -133,16 +140,18 @@ export default function Dashboard({
       fetchUsers(range, scopedUser, scopedEnvironment),
       fetchCreatedEvents(range, scopedUser, scopedEnvironment),
       fetchExecutedEvents(range, scopedUser, scopedEnvironment),
+      fetchTestCaseDocumentEvents(range, scopedUser, scopedEnvironment),
       fetchUserEmails(),
       fetchEnvironmentIds(),
     ])
-      .then(([s, d, u, created, executed, emails, envIds]) => {
+      .then(([s, d, u, created, executed, testCaseDocuments, emails, envIds]) => {
         if (cancelled) return;
         setServerSummary(s);
         setServerDaily(d);
         setRawUsers(u);
         setRawCreatedEvents(created);
         setRawExecutedEvents(executed);
+        setRawTestCaseDocumentEvents(testCaseDocuments);
         setUserEmails(emails);
         setEnvironmentIds(envIds);
         setError(null);
@@ -179,6 +188,13 @@ export default function Dashboard({
         ? rawExecutedEvents.filter((r) => fuzzyMatch(debouncedSearch, r.environment))
         : rawExecutedEvents,
     [rawExecutedEvents, searchActive, debouncedSearch],
+  );
+  const testCaseDocumentEvents = useMemo(
+    () =>
+      searchActive
+        ? rawTestCaseDocumentEvents.filter((r) => fuzzyMatch(debouncedSearch, r.environment ?? ""))
+        : rawTestCaseDocumentEvents,
+    [rawTestCaseDocumentEvents, searchActive, debouncedSearch],
   );
   const summary = searchActive ? summarizeRows(users) : serverSummary;
   const daily = searchActive ? dailyFromRows(users) : serverDaily;
@@ -234,11 +250,16 @@ export default function Dashboard({
             label="Test cases executed"
             value={summary?.test_cases_executed ?? 0}
           />
+          <StatTile
+            label="Test case documents generated"
+            value={summary?.test_case_documents_generated ?? 0}
+          />
         </div>
         <DailyTrend data={filled} />
         <UsersTable rows={users} range={range} />
         <CreatedEventsTable rows={createdEvents} range={range} />
         <ExecutedEventsTable rows={executedEvents} range={range} />
+        <TestCaseDocumentEventsTable rows={testCaseDocumentEvents} range={range} />
         <ArtifactsPanel
           range={range}
           userEmails={scopedUser}
