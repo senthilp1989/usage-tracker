@@ -424,12 +424,179 @@ header.app {
   align-items: center;
 }
 
-.pop-custom {
-  padding: 10px;
+.pop.wide {
+  min-width: 312px;
+}
+
+/* ── range calendar (period popover) ────────────────────── */
+.cal {
+  padding: 4px;
+}
+
+.cal-fields {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.cal-field {
   display: flex;
-  gap: 8px;
+  flex-direction: column;
+  gap: 1px;
+  padding: 7px 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: 9px;
+  background: var(--surface);
+  font: inherit;
+  color: var(--ink);
+  cursor: pointer;
+  text-align: left;
+  min-width: 0;
+}
+
+.cal-field span {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.cal-field b {
+  font-size: 12.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* The active endpoint is what the grid below is currently setting - it has to
+   be unmistakable, or every click lands on the wrong field. */
+.cal-field.on {
+  border-color: var(--accent);
+  background: var(--accent-wash);
+}
+
+.cal-field.on span {
+  color: var(--accent-2);
+}
+
+.cal-hd {
+  display: flex;
   align-items: center;
-  flex-wrap: wrap;
+  justify-content: space-between;
+  padding: 0 2px 6px;
+}
+
+.cal-title {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.cal-nav {
+  border: 1px solid transparent;
+  background: none;
+  color: var(--ink-2);
+  font: inherit;
+  font-size: 16px;
+  line-height: 1;
+  width: 26px;
+  height: 26px;
+  border-radius: 7px;
+  cursor: pointer;
+}
+
+.cal-nav:hover {
+  background: var(--surface-2);
+  color: var(--ink);
+}
+
+.cal-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 2px;
+}
+
+.cal-wd {
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--muted);
+  text-align: center;
+  padding: 4px 0 2px;
+}
+
+.cal-day {
+  font: inherit;
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  padding: 6px 0;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  background: none;
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.cal-day:hover:not(:disabled) {
+  background: var(--surface-3);
+}
+
+.cal-day--empty {
+  visibility: hidden;
+  cursor: default;
+}
+
+.cal-day--off {
+  color: var(--muted);
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.cal-day--today {
+  border-color: var(--line-strong);
+}
+
+.cal-day--in {
+  background: var(--accent-wash);
+  border-radius: 0;
+}
+
+.cal-day--sel,
+.cal-day--sel:hover:not(:disabled) {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+  font-weight: 600;
+}
+
+.cal-hint {
+  margin: 10px 2px 0;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.cal-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border-top: 1px solid var(--line);
+  margin-top: 10px;
+  padding-top: 10px;
+}
+
+.cal-apply {
+  height: 30px;
+  padding: 0 14px;
+}
+
+.cal-apply:disabled {
+  opacity: 0.45;
+  cursor: default;
+  background: var(--accent);
+  border-color: var(--accent);
 }
 
 .link-btn {

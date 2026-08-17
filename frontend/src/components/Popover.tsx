@@ -12,7 +12,7 @@ export default function Popover({
   count,
   open,
   onOpenChange,
-  multiselectable,
+  wide,
   children,
 }: {
   label: string;
@@ -21,7 +21,7 @@ export default function Popover({
   count?: number;
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  multiselectable?: boolean;
+  wide?: boolean;
   children: ReactNode;
 }) {
   const rootRef = useRef<HTMLDivElement>(null);
@@ -48,7 +48,7 @@ export default function Popover({
       <button
         type="button"
         aria-expanded={open}
-        aria-haspopup="listbox"
+        aria-haspopup="true"
         onClick={() => onOpenChange(!open)}
       >
         {icon}
@@ -65,13 +65,11 @@ export default function Popover({
           <path d="M1 3.5 5 7.5 9 3.5Z" />
         </svg>
       </button>
+      {/* The panel is a plain container - the caller puts role="listbox" on its
+          own option list, so a panel holding a calendar rather than options
+          isn't mislabelled as one. */}
       {open && (
-        <div
-          className="pop"
-          role="listbox"
-          aria-label={ariaLabel}
-          aria-multiselectable={multiselectable}
-        >
+        <div className={`pop${wide ? " wide" : ""}`} aria-label={ariaLabel}>
           {children}
         </div>
       )}

@@ -1,8 +1,8 @@
 import { useState } from "react";
-import { addDays, fmt, todayIso } from "../format";
+import { fmt, fullDate } from "../format";
 import type { DateRange } from "../types";
-import DatePicker from "./DatePicker";
 import Popover from "./Popover";
+import RangeCalendar from "./RangeCalendar";
 
 export type Preset = "today" | "7d" | "30d" | "90d" | "custom";
 
@@ -34,24 +34,11 @@ export function presetRange(preset: Preset, today: Date): DateRange {
     case "90d":
       return { from: iso(daysAgo(89)), to: iso(today) };
     case "custom":
-      // `to` starts empty - nothing is fetched until the user explicitly
-      // picks an end date (see Dashboard.tsx).
-      return { from: iso(today), to: "" };
+      // Never actually rendered: "custom" is only ever set from the
+      // calendar's Apply, which sets the real range in the same batched
+      // update. Present so the switch stays exhaustive.
+      return { from: iso(today), to: iso(today) };
   }
-}
-
-function minIso(a: string, b: string): string {
-  return a < b ? a : b;
-}
-
-// The native date-picker calendar can only gray out/disable days via the
-// input's own min/max - there's no way to style individual cells - so every
-// bound that makes a date genuinely unselectable (future dates, and the
-// 90-day span cap) has to be reflected in min/max, not just enforced after
-// the fact, or the calendar would show those days as pickable.
-function clampToMaxSpan(from: string, to: string): string {
-  const maxTo = minIso(addDays(from, MAX_CUSTOM_RANGE_DAYS - 1), todayIso());
-  return to > maxTo ? maxTo : to;
 }
 
 const CalendarIcon = (
@@ -137,14 +124,13 @@ export default function FilterBar({
   exportDisabled,
 }: Props) {
   const [openPop, setOpenPop] = useState<"range" | "user" | "env" | null>(null);
+  const [calendarOpen, setCalendarOpen] = useState(false);
   const setOpen = (id: "range" | "user" | "env") => (open: boolean) =>
     setOpenPop(open ? id : null);
 
   const rangeLabel =
     preset === "custom"
-      ? range.to
-        ? `${range.from} → ${range.to}`
-        : "Custom range…"
+      ? `${fullDate(range.from)} – ${fullDate(range.to)}`
       : (PRESETS.find((p) => p.id === preset)?.label ?? "Last 90 days");
 
   const offDefault =
@@ -159,65 +145,58 @@ export default function FilterBar({
           ariaLabel="Date range"
           icon={CalendarIcon}
           open={openPop === "range"}
-          onOpenChange={setOpen("range")}
+          onOpenChange={(open) => {
+            setOpenPop(open ? "range" : null);
+            if (!open) setCalendarOpen(false);
+          }}
+          wide={calendarOpen}
         >
-          <div className="pop-list">
-            {PRESETS.map((p) => (
-              <button
-                type="button"
-                className="pop-row"
-                key={p.id}
-                role="option"
-                aria-selected={preset === p.id}
-                onClick={() => {
-                  onPresetChange(p.id);
-                  setOpenPop(null);
-                }}
+          {calendarOpen ? (
+            <RangeCalendar
+              value={range}
+              maxSpanDays={MAX_CUSTOM_RANGE_DAYS}
+              onApply={(next) => {
+                onPresetChange("custom");
+                onRangeChange(next);
+                setCalendarOpen(false);
+                setOpenPop(null);
+              }}
+              onBack={() => setCalendarOpen(false)}
+            />
+          ) : (
+            <>
+              <div
+                className="pop-list"
+                role="listbox"
+                aria-label="Date range presets"
               >
-                <span className="ck">✓</span>
-                <span className="nm">{p.label}</span>
-              </button>
-            ))}
-          </div>
-          <div className="pop-foot">
-            <button
-              type="button"
-              className="link-btn"
-              onClick={() => onPresetChange("custom")}
-            >
-              Custom range…
-            </button>
-          </div>
-          {preset === "custom" && (
-            <div className="pop-custom">
-              <DatePicker
-                value={range.from}
-                max={todayIso()}
-                onChange={(from) => onRangeChange({ from, to: "" })}
-                ariaLabel="From date"
-                placeholder="From"
-              />
-              <DatePicker
-                value={range.to}
-                min={range.from}
-                max={
-                  range.from
-                    ? minIso(
-                        addDays(range.from, MAX_CUSTOM_RANGE_DAYS - 1),
-                        todayIso(),
-                      )
-                    : todayIso()
-                }
-                onChange={(to) =>
-                  onRangeChange({
-                    ...range,
-                    to: clampToMaxSpan(range.from, to),
-                  })
-                }
-                ariaLabel="To date"
-                placeholder="To"
-              />
-            </div>
+                {PRESETS.map((p) => (
+                  <button
+                    type="button"
+                    className="pop-row"
+                    key={p.id}
+                    role="option"
+                    aria-selected={preset === p.id}
+                    onClick={() => {
+                      onPresetChange(p.id);
+                      setOpenPop(null);
+                    }}
+                  >
+                    <span className="ck">✓</span>
+                    <span className="nm">{p.label}</span>
+                  </button>
+                ))}
+              </div>
+              <div className="pop-foot">
+                <button
+                  type="button"
+                  className="link-btn"
+                  onClick={() => setCalendarOpen(true)}
+                >
+                  Custom range…
+                </button>
+              </div>
+            </>
           )}
         </Popover>
 
@@ -368,7 +347,6 @@ function MultiPopover({
       count={selected.length}
       open={open}
       onOpenChange={setOpen(id)}
-      multiselectable
     >
       <div className="pop-search">
         <input
@@ -379,7 +357,12 @@ function MultiPopover({
           aria-label={`Filter ${noun}`}
         />
       </div>
-      <div className="pop-list">
+      <div
+        className="pop-list"
+        role="listbox"
+        aria-multiselectable="true"
+        aria-label={ariaLabel}
+      >
         {visible.length === 0 ? (
           <div className="pop-row" style={{ color: "var(--muted)" }}>
             No matches
