@@ -86,13 +86,53 @@ export interface Page<T> {
   total: number;
 }
 
+// Four metrics, four fixed colour slots. Colour follows the metric, never its
+// rank - filtering a series out must not repaint the survivors, so the slot
+// index is baked in here rather than derived from position at render time.
 export const METRICS = [
-  { key: "test_cases_created", label: "Test cases created" },
-  { key: "test_cases_executed", label: "Test cases executed" },
-  { key: "documents_generated", label: "TSD documents generated" },
-  { key: "test_case_documents_generated", label: "Test case documents generated" },
+  {
+    key: "test_cases_created",
+    label: "Test cases created",
+    short: "Created",
+    colorVar: "var(--s1)",
+  },
+  {
+    key: "test_cases_executed",
+    label: "Test cases executed",
+    short: "Executed",
+    colorVar: "var(--s2)",
+  },
+  {
+    key: "documents_generated",
+    label: "TSD documents generated",
+    short: "TSD docs",
+    colorVar: "var(--s3)",
+  },
+  {
+    key: "test_case_documents_generated",
+    label: "Test case documents generated",
+    short: "TC docs",
+    colorVar: "var(--s4)",
+  },
 ] as const;
 
 export type MetricKey = (typeof METRICS)[number]["key"];
 
-export const TREND_METRICS = METRICS;
+/** The four metric counts for one grouping key, in METRICS order. */
+export type MetricTuple = [number, number, number, number];
+
+export function metricTuple(row: Record<MetricKey, number>): MetricTuple {
+  return [
+    row.test_cases_created,
+    row.test_cases_executed,
+    row.documents_generated,
+    row.test_case_documents_generated,
+  ];
+}
+
+export function tupleTotal(
+  values: MetricTuple,
+  series: boolean[] = [true, true, true, true],
+): number {
+  return values.reduce((sum, v, i) => sum + (series[i] ? v : 0), 0);
+}

@@ -26,21 +26,27 @@ export default function Hero({
           Total tracked actions
         </div>
         <div className="hero-num">{total.toLocaleString()}</div>
-        <div className="hero-unit">test cases &amp; documents created, run and exported</div>
-        <div className="hero-delta">
-          {d.none ? (
-            <span>
-              {d.text} for the previous {windowDays} days
-            </span>
-          ) : (
-            <>
-              <DeltaIcon direction={d.direction} />
-              <span>
-                {d.text} vs previous {windowDays} days
-              </span>
-            </>
-          )}
+        <div className="hero-unit">
+          test cases &amp; documents created, run and exported
         </div>
+        {/* No window selected yet (custom range with no end date) - there is
+            nothing to compare against, so don't claim "no change". */}
+        {windowDays > 0 && (
+          <div className="hero-delta">
+            {d.none ? (
+              <span>
+                {d.text} for the previous {windowDays} days
+              </span>
+            ) : (
+              <>
+                <DeltaIcon direction={d.direction} />
+                <span>
+                  {d.text} vs previous {windowDays} days
+                </span>
+              </>
+            )}
+          </div>
+        )}
       </div>
       <div className="hero-facts">
         <div>

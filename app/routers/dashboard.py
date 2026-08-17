@@ -717,12 +717,16 @@ def test_case_document_events_export(
     )
 
 
-# --- New rollup for the redesign: totals per (user, environment) pair, no
-# day dimension. Feeds the "by user"/"by environment" ranked bars (row/column
-# sums), the heatmap (the raw grid), and the signals (concentration/
-# key-person % are arithmetic on these totals) - one endpoint instead of
-# several bespoke ones. Same UNION ALL + GROUP BY shape as _users_branch,
-# just without the report_date grouping key.
+# --- Rollup: totals per (user, environment) pair, no day dimension. Same
+# UNION ALL + GROUP BY shape as _users_branch, just without the report_date
+# grouping key.
+#
+# The dashboard no longer calls this: the redesigned page derives its
+# leaderboards, heatmap and hero facts from /users/export instead, because it
+# needs the day dimension anyway (active-day counts, the detail drawer) and
+# deriving every panel from one flat fact table is what guarantees they all
+# agree. Kept as a supported endpoint for anything that wants the pair totals
+# without the per-day rows.
 
 
 def _user_env_branch(

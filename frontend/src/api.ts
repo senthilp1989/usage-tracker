@@ -8,18 +8,25 @@ import type {
   Page,
   StatsSummary,
   TestCaseDocumentEventDetail,
-  UserEnvironmentStats,
   UserStats,
 } from "./types";
 
 const TOKEN_KEY = "usage_tracker_token";
+const ACCOUNT_KEY = "usage_tracker_account";
 
 export function getToken(): string | null {
   return localStorage.getItem(TOKEN_KEY);
 }
 
+/** Whatever was typed at sign-in - the token payload carries only an expiry,
+ *  so this is the only account label the dashboard has for the header. */
+export function getAccount(): string {
+  return localStorage.getItem(ACCOUNT_KEY) ?? "";
+}
+
 export function clearToken(): void {
   localStorage.removeItem(TOKEN_KEY);
+  localStorage.removeItem(ACCOUNT_KEY);
 }
 
 export class UnauthorizedError extends Error {}
@@ -50,11 +57,17 @@ export async function login(username: string, password: string): Promise<void> {
   if (!res.ok) throw new Error(`Login failed (${res.status})`);
   const data = (await res.json()) as { token: string };
   localStorage.setItem(TOKEN_KEY, data.token);
+  localStorage.setItem(ACCOUNT_KEY, username);
 }
 
 // `search` and `environmentIds` are mutually exclusive on the backend (search
 // overrides the environment dropdown) - when both are passed, search wins.
-function scope(range: DateRange, userEmails?: string[], environmentIds?: string[], search?: string): string {
+function scope(
+  range: DateRange,
+  userEmails?: string[],
+  environmentIds?: string[],
+  search?: string,
+): string {
   const params = new URLSearchParams({ from: range.from, to: range.to });
   (userEmails ?? []).forEach((email) => params.append("user_email", email));
   if (search) {
@@ -65,11 +78,25 @@ function scope(range: DateRange, userEmails?: string[], environmentIds?: string[
   return params.toString();
 }
 
-export const fetchSummary = (range: DateRange, userEmails?: string[], environmentIds?: string[], search?: string) =>
-  request<StatsSummary>(`/dashboard/summary?${scope(range, userEmails, environmentIds, search)}`);
+export const fetchSummary = (
+  range: DateRange,
+  userEmails?: string[],
+  environmentIds?: string[],
+  search?: string,
+) =>
+  request<StatsSummary>(
+    `/dashboard/summary?${scope(range, userEmails, environmentIds, search)}`,
+  );
 
-export const fetchDaily = (range: DateRange, userEmails?: string[], environmentIds?: string[], search?: string) =>
-  request<DailyStats[]>(`/dashboard/daily?${scope(range, userEmails, environmentIds, search)}`);
+export const fetchDaily = (
+  range: DateRange,
+  userEmails?: string[],
+  environmentIds?: string[],
+  search?: string,
+) =>
+  request<DailyStats[]>(
+    `/dashboard/daily?${scope(range, userEmails, environmentIds, search)}`,
+  );
 
 export const fetchUsers = (
   range: DateRange,
@@ -81,6 +108,61 @@ export const fetchUsers = (
 ) =>
   request<Page<UserStats>>(
     `/dashboard/users?${scope(range, userEmails, environmentIds, search)}&page=${page}&page_size=${pageSize}`,
+  );
+
+// The redesign derives the leaderboards, heatmap, hero facts and the first two
+// detail tabs from this one flat (user, environment, day) fact table rather
+// than from a bespoke endpoint per panel - so every panel is guaranteed to
+// agree with every other. Backend-side date/user/environment scoping still
+// applies; only the reshaping happens here.
+export const fetchUsersExport = (
+  range: DateRange,
+  userEmails?: string[],
+  environmentIds?: string[],
+  search?: string,
+) =>
+  request<UserStats[]>(
+    `/dashboard/users/export?${scope(range, userEmails, environmentIds, search)}`,
+  );
+
+export const fetchCreatedEventsExport = (
+  range: DateRange,
+  userEmails?: string[],
+  environmentIds?: string[],
+  search?: string,
+) =>
+  request<CreatedEventDetail[]>(
+    `/dashboard/created-events/export?${scope(range, userEmails, environmentIds, search)}`,
+  );
+
+export const fetchExecutedEventsExport = (
+  range: DateRange,
+  userEmails?: string[],
+  environmentIds?: string[],
+  search?: string,
+) =>
+  request<ExecutedEventDetail[]>(
+    `/dashboard/executed-events/export?${scope(range, userEmails, environmentIds, search)}`,
+  );
+
+export const fetchDocumentEventsExport = (
+  range: DateRange,
+  userEmails?: string[],
+  environmentIds?: string[],
+  search?: string,
+) =>
+  request<DocumentEventDetail[]>(
+    `/dashboard/document-events/export?${scope(range, userEmails, environmentIds, search)}`,
+  );
+
+export const fetchTestCaseDocumentEventsExport = (
+  range: DateRange,
+  userEmails?: string[],
+  environmentIds?: string[],
+  search?: string,
+) =>
+  request<TestCaseDocumentEventDetail[]>(
+    `/dashboard/test-case-document-events/export?${scope(range, userEmails, environmentIds, search)}`,
   );
 
 export const fetchCreatedEvents = (
@@ -144,8 +226,12 @@ function artifactScope(
   interfaceNames?: string[],
   search?: string,
 ): string {
-  const params = new URLSearchParams(scope(range, userEmails, environmentIds, search));
-  (interfaceNames ?? []).forEach((iface) => params.append("interface_name", iface));
+  const params = new URLSearchParams(
+    scope(range, userEmails, environmentIds, search),
+  );
+  (interfaceNames ?? []).forEach((iface) =>
+    params.append("interface_name", iface),
+  );
   return params.toString();
 }
 
@@ -174,13 +260,3 @@ export const fetchArtifactsExport = (
   );
 
 export const fetchInterfaces = () => request<string[]>("/dashboard/interfaces");
-
-export const fetchUserEnvironmentRollup = (
-  range: DateRange,
-  userEmails?: string[],
-  environmentIds?: string[],
-  search?: string,
-) =>
-  request<UserEnvironmentStats[]>(
-    `/dashboard/user-environment-rollup?${scope(range, userEmails, environmentIds, search)}`,
-  );
