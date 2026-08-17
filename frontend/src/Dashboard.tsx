@@ -534,12 +534,6 @@ export default function Dashboard({
           usageRows={usageRows}
           artifactRows={artifacts}
         />
-
-        <p className="foot-note">
-          Every panel on this page is scoped by the filter bar above and derived
-          from the same event rows, so the numbers always agree. Series palette
-          validated in both light and dark mode.
-        </p>
       </main>
       <Tip tip={tip} series={series} />
     </>

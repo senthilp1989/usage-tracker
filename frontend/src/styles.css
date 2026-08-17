@@ -1445,13 +1445,6 @@ table.data tbody tr:hover {
   font-size: 13px;
 }
 
-.foot-note {
-  margin: 26px 2px 0;
-  font-size: 11.5px;
-  color: var(--muted);
-  line-height: 1.6;
-}
-
 /* ── login ──────────────────────────────────────────────── */
 .login-page {
   min-height: 100vh;
