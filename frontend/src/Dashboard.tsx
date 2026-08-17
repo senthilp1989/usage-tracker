@@ -385,7 +385,7 @@ export default function Dashboard({
       {/* On refetch the previous render is held at reduced opacity - no
           skeleton flash, no layout jump. */}
       <main className={`wrap${loading ? " loading-dim" : ""}`}>
-        {error && <div className="card login-error banner-error">{error}</div>}
+        {error && <div className="card banner-error">{error}</div>}
 
         <div className="sec-title">
           <h2>Adoption at a glance</h2>
