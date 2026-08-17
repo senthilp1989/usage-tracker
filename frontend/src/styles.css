@@ -620,48 +620,6 @@ header.app {
   flex: 1;
 }
 
-.chipwrap {
-  display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
-  align-items: center;
-}
-
-.chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  height: 26px;
-  padding: 0 6px 0 10px;
-  background: var(--accent-wash);
-  border: 1px solid transparent;
-  color: var(--accent-2);
-  border-radius: 20px;
-  font-size: 12px;
-  font-weight: 500;
-  max-width: 220px;
-}
-
-.chip > span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.chip button {
-  background: none;
-  border: none;
-  cursor: pointer;
-  opacity: 0.6;
-  padding: 2px;
-  line-height: 0;
-  color: inherit;
-}
-
-.chip button:hover {
-  opacity: 1;
-}
-
 /* ── hero + kpi ─────────────────────────────────────────── */
 .hero-grid {
   display: grid;

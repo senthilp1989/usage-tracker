@@ -228,25 +228,9 @@ export default function FilterBar({
           onChange={onEnvironmentChange}
         />
 
-        <div className="chipwrap">
-          {user.map((u) => (
-            <Chip
-              key={`u-${u}`}
-              text={u}
-              onRemove={() => onUserChange(user.filter((v) => v !== u))}
-            />
-          ))}
-          {environment.map((e) => (
-            <Chip
-              key={`e-${e}`}
-              text={e}
-              onRemove={() =>
-                onEnvironmentChange(environment.filter((v) => v !== e))
-              }
-            />
-          ))}
-        </div>
-
+        {/* No chips for the active selection - the dropdown's own label and
+            count pill already say what's selected, and deselecting happens in
+            the popover or via Reset. */}
         <div className="spacer" />
         {offDefault && (
           <button className="btn" onClick={onReset}>
@@ -270,27 +254,6 @@ export default function FilterBar({
         </button>
       </div>
     </div>
-  );
-}
-
-function Chip({ text, onRemove }: { text: string; onRemove: () => void }) {
-  return (
-    <span className="chip">
-      <span title={text}>{text}</span>
-      <button type="button" aria-label={`Remove ${text}`} onClick={onRemove}>
-        <svg
-          width="11"
-          height="11"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="3"
-          strokeLinecap="round"
-        >
-          <path d="M6 6l12 12M18 6L6 18" />
-        </svg>
-      </button>
-    </span>
   );
 }
 
