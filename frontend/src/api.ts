@@ -8,6 +8,7 @@ import type {
   Page,
   StatsSummary,
   TestCaseDocumentEventDetail,
+  UserEnvironmentStats,
   UserStats,
 } from "./types";
 
@@ -161,4 +162,25 @@ export const fetchArtifacts = (
     `/dashboard/artifacts?${artifactScope(range, userEmails, environmentIds, interfaceNames, search)}&page=${page}&page_size=${pageSize}`,
   );
 
+export const fetchArtifactsExport = (
+  range: DateRange,
+  userEmails?: string[],
+  environmentIds?: string[],
+  interfaceNames?: string[],
+  search?: string,
+) =>
+  request<ArtifactStats[]>(
+    `/dashboard/artifacts/export?${artifactScope(range, userEmails, environmentIds, interfaceNames, search)}`,
+  );
+
 export const fetchInterfaces = () => request<string[]>("/dashboard/interfaces");
+
+export const fetchUserEnvironmentRollup = (
+  range: DateRange,
+  userEmails?: string[],
+  environmentIds?: string[],
+  search?: string,
+) =>
+  request<UserEnvironmentStats[]>(
+    `/dashboard/user-environment-rollup?${scope(range, userEmails, environmentIds, search)}`,
+  );

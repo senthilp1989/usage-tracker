@@ -25,6 +25,15 @@ export interface UserStats {
   last_event_at: string;
 }
 
+export interface UserEnvironmentStats {
+  user_email: string;
+  environment: string;
+  test_cases_created: number;
+  test_cases_executed: number;
+  documents_generated: number;
+  test_case_documents_generated: number;
+}
+
 export interface ArtifactStats {
   environment: string;
   interface_name: string;
