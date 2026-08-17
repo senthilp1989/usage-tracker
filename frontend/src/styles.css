@@ -1257,9 +1257,19 @@ header.app {
   overflow-x: auto;
 }
 
-/* ── detail drawer, expanded ────────────────────────────── */
+/* ── detail drawer ──────────────────────────────────────── */
 .detail-card {
   overflow: hidden;
+}
+
+/* A fixed viewport for the table body. Tabs hold different row counts and
+   different row heights - a 7-row tab and one with wrapped test-case lists
+   otherwise swing the card between ~465px and ~736px, so switching tabs
+   jumps the whole page. Height stays put; taller content scrolls inside,
+   under the sticky header. Expanded overrides this with flex:1 below. */
+.detail-card:not(.is-expanded) .tbl-scroll {
+  height: 430px;
+  overflow-y: auto;
 }
 
 .detail-backdrop {
