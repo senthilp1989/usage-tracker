@@ -2,7 +2,7 @@ from datetime import date, datetime
 from typing import Generic, List, Optional, TypeVar
 from zoneinfo import ZoneInfo
 
-from pydantic import BaseModel, EmailStr, field_serializer
+from pydantic import BaseModel, EmailStr, field_serializer, field_validator
 
 IST = ZoneInfo("Asia/Kolkata")
 
@@ -56,12 +56,26 @@ class LoginOut(BaseModel):
 # values was meant to avoid.
 
 
+def _canonicalize_environment(value: str) -> str:
+    # Case-only variants (Tarento_Dev vs TARENTO_DEV) were being counted as
+    # distinct environments in every dashboard aggregate. Normalize to one
+    # canonical casing per underscore segment on write, matching the
+    # prevailing style already in the data. See migration 0007 for the
+    # backfill of rows ingested before this existed.
+    return "_".join(part.capitalize() for part in value.split("_"))
+
+
 class TestCaseCreatedEventIn(BaseModel):
     user_email: EmailStr
     environment: str
     interface_name: str
     test_case_name: str
     created_at: datetime
+
+    @field_validator("environment")
+    @classmethod
+    def _normalize_environment(cls, value: str) -> str:
+        return _canonicalize_environment(value)
 
 
 class TestCaseExecutedEventIn(BaseModel):
@@ -72,12 +86,22 @@ class TestCaseExecutedEventIn(BaseModel):
     status: str
     created_at: datetime
 
+    @field_validator("environment")
+    @classmethod
+    def _normalize_environment(cls, value: str) -> str:
+        return _canonicalize_environment(value)
+
 
 class DocumentGeneratedEventIn(BaseModel):
     user_email: EmailStr
     environment: str
     interface_name: str
     created_at: datetime
+
+    @field_validator("environment")
+    @classmethod
+    def _normalize_environment(cls, value: str) -> str:
+        return _canonicalize_environment(value)
 
 
 class TestCaseDocumentGeneratedEventIn(BaseModel):
@@ -88,6 +112,11 @@ class TestCaseDocumentGeneratedEventIn(BaseModel):
     test_case_names: List[str] = []
     test_case_count: int
     created_at: datetime
+
+    @field_validator("environment")
+    @classmethod
+    def _normalize_environment(cls, value: str) -> str:
+        return _canonicalize_environment(value)
 
 
 class UsageEventsIn(BaseModel):
@@ -140,6 +169,15 @@ class UserStats(BaseModel):
     documents_generated: int
     test_case_documents_generated: int
     last_event_at: datetime
+
+
+class UserEnvironmentStats(BaseModel):
+    user_email: str
+    environment: str
+    test_cases_created: int
+    test_cases_executed: int
+    documents_generated: int
+    test_case_documents_generated: int
 
 
 class ArtifactStats(BaseModel):

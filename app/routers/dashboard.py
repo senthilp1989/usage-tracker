@@ -26,6 +26,7 @@ from ..schemas import (
     Page,
     StatsSummary,
     TestCaseDocumentEventDetail,
+    UserEnvironmentStats,
     UserStats,
 )
 
@@ -264,17 +265,16 @@ def _users_branch(
     return q.group_by(model.user_email, model.environment, day)
 
 
-@router.get("/users", response_model=Page[UserStats], dependencies=[Depends(verify_dashboard_token)])
-def users(
-    date_from: date = Query(alias="from"),
-    date_to: date = Query(alias="to"),
-    user_email: Optional[List[str]] = Query(default=None),
-    environment: Optional[List[str]] = Query(default=None),
-    search: Optional[str] = Query(default=None),
-    page: int = Query(default=1, ge=1),
-    page_size: int = Query(default=10, ge=1, le=200),
-    db: Session = Depends(get_db),
-) -> Page[UserStats]:
+def _users_grouped_query(
+    date_from: date,
+    date_to: date,
+    user_email: Optional[List[str]],
+    environment: Optional[List[str]],
+    search: Optional[str],
+):
+    """Grouped + ordered (user, environment, day) query, shared by /users (paginated) and
+    /users/export (everything, no offset/limit). Returns (select statement, combined subquery)
+    - the caller adds offset/limit or a count query against the subquery as needed."""
     branches = [
         _users_branch(model, metric, date_from, date_to, user_email, environment, search)
         for model, metric in (
@@ -285,15 +285,7 @@ def users(
         )
     ]
     combined = union_all(*branches).subquery()
-
-    key_subquery = (
-        select(combined.c.user_email, combined.c.environment, combined.c.report_date)
-        .group_by(combined.c.user_email, combined.c.environment, combined.c.report_date)
-        .subquery()
-    )
-    total = db.execute(select(func.count()).select_from(key_subquery)).scalar() or 0
-
-    page_rows = db.execute(
+    query = (
         select(
             combined.c.user_email,
             combined.c.environment,
@@ -306,11 +298,47 @@ def users(
         )
         .group_by(combined.c.user_email, combined.c.environment, combined.c.report_date)
         .order_by(combined.c.user_email, combined.c.environment, combined.c.report_date)
-        .offset((page - 1) * page_size)
-        .limit(page_size)
-    ).all()
+    )
+    return query, combined
+
+
+@router.get("/users", response_model=Page[UserStats], dependencies=[Depends(verify_dashboard_token)])
+def users(
+    date_from: date = Query(alias="from"),
+    date_to: date = Query(alias="to"),
+    user_email: Optional[List[str]] = Query(default=None),
+    environment: Optional[List[str]] = Query(default=None),
+    search: Optional[str] = Query(default=None),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=10, ge=1, le=200),
+    db: Session = Depends(get_db),
+) -> Page[UserStats]:
+    query, combined = _users_grouped_query(date_from, date_to, user_email, environment, search)
+
+    key_subquery = (
+        select(combined.c.user_email, combined.c.environment, combined.c.report_date)
+        .group_by(combined.c.user_email, combined.c.environment, combined.c.report_date)
+        .subquery()
+    )
+    total = db.execute(select(func.count()).select_from(key_subquery)).scalar() or 0
+
+    page_rows = db.execute(query.offset((page - 1) * page_size).limit(page_size)).all()
 
     return Page(items=[UserStats(**row._mapping) for row in page_rows], total=total)
+
+
+@router.get("/users/export", response_model=List[UserStats], dependencies=[Depends(verify_dashboard_token)])
+def users_export(
+    date_from: date = Query(alias="from"),
+    date_to: date = Query(alias="to"),
+    user_email: Optional[List[str]] = Query(default=None),
+    environment: Optional[List[str]] = Query(default=None),
+    search: Optional[str] = Query(default=None),
+    db: Session = Depends(get_db),
+) -> List[UserStats]:
+    query, _ = _users_grouped_query(date_from, date_to, user_email, environment, search)
+    rows = db.execute(query).all()
+    return [UserStats(**row._mapping) for row in rows]
 
 
 def _artifacts_branch(
@@ -349,6 +377,40 @@ def _artifacts_branch(
     return q.group_by(model.environment, model.interface_name)
 
 
+def _artifacts_grouped_query(
+    date_from: date,
+    date_to: date,
+    user_email: Optional[List[str]],
+    environment: Optional[List[str]],
+    interface_name: Optional[List[str]],
+    search: Optional[str],
+):
+    """Same shared-query pattern as `_users_grouped_query`, grouped by (environment, interface)."""
+    branches = [
+        _artifacts_branch(model, metric, date_from, date_to, user_email, environment, interface_name, search)
+        for model, metric in (
+            (TestCaseCreatedEvent, "test_cases_created"),
+            (TestCaseExecutedEvent, "test_cases_executed"),
+            (DocumentGeneratedEvent, "documents_generated"),
+            (TestCaseDocumentGeneratedEvent, "test_case_documents_generated"),
+        )
+    ]
+    combined = union_all(*branches).subquery()
+    query = (
+        select(
+            combined.c.environment,
+            combined.c.interface_name,
+            func.sum(combined.c.test_cases_created).label("test_cases_created"),
+            func.sum(combined.c.test_cases_executed).label("test_cases_executed"),
+            func.sum(combined.c.documents_generated).label("documents_generated"),
+            func.sum(combined.c.test_case_documents_generated).label("test_case_documents_generated"),
+        )
+        .group_by(combined.c.environment, combined.c.interface_name)
+        .order_by(combined.c.environment, combined.c.interface_name)
+    )
+    return query, combined
+
+
 @router.get("/artifacts", response_model=Page[ArtifactStats], dependencies=[Depends(verify_dashboard_token)])
 def artifacts(
     date_from: date = Query(alias="from"),
@@ -361,16 +423,7 @@ def artifacts(
     page_size: int = Query(default=10, ge=1, le=200),
     db: Session = Depends(get_db),
 ) -> Page[ArtifactStats]:
-    branches = [
-        _artifacts_branch(model, metric, date_from, date_to, user_email, environment, interface_name, search)
-        for model, metric in (
-            (TestCaseCreatedEvent, "test_cases_created"),
-            (TestCaseExecutedEvent, "test_cases_executed"),
-            (DocumentGeneratedEvent, "documents_generated"),
-            (TestCaseDocumentGeneratedEvent, "test_case_documents_generated"),
-        )
-    ]
-    combined = union_all(*branches).subquery()
+    query, combined = _artifacts_grouped_query(date_from, date_to, user_email, environment, interface_name, search)
 
     key_subquery = (
         select(combined.c.environment, combined.c.interface_name)
@@ -379,22 +432,24 @@ def artifacts(
     )
     total = db.execute(select(func.count()).select_from(key_subquery)).scalar() or 0
 
-    page_rows = db.execute(
-        select(
-            combined.c.environment,
-            combined.c.interface_name,
-            func.sum(combined.c.test_cases_created).label("test_cases_created"),
-            func.sum(combined.c.test_cases_executed).label("test_cases_executed"),
-            func.sum(combined.c.documents_generated).label("documents_generated"),
-            func.sum(combined.c.test_case_documents_generated).label("test_case_documents_generated"),
-        )
-        .group_by(combined.c.environment, combined.c.interface_name)
-        .order_by(combined.c.environment, combined.c.interface_name)
-        .offset((page - 1) * page_size)
-        .limit(page_size)
-    ).all()
+    page_rows = db.execute(query.offset((page - 1) * page_size).limit(page_size)).all()
 
     return Page(items=[ArtifactStats(**row._mapping) for row in page_rows], total=total)
+
+
+@router.get("/artifacts/export", response_model=List[ArtifactStats], dependencies=[Depends(verify_dashboard_token)])
+def artifacts_export(
+    date_from: date = Query(alias="from"),
+    date_to: date = Query(alias="to"),
+    user_email: Optional[List[str]] = Query(default=None),
+    environment: Optional[List[str]] = Query(default=None),
+    interface_name: Optional[List[str]] = Query(default=None),
+    search: Optional[str] = Query(default=None),
+    db: Session = Depends(get_db),
+) -> List[ArtifactStats]:
+    query, _ = _artifacts_grouped_query(date_from, date_to, user_email, environment, interface_name, search)
+    rows = db.execute(query).all()
+    return [ArtifactStats(**row._mapping) for row in rows]
 
 
 def _paginate_events(
@@ -423,6 +478,25 @@ def _paginate_events(
     return Page(items=[schema(**r._mapping) for r in rows], total=total)
 
 
+def _export_events(
+    db: Session,
+    model,
+    columns,
+    schema,
+    date_from: date,
+    date_to: date,
+    user_email: Optional[List[str]],
+    environment: Optional[List[str]],
+    search: Optional[str],
+):
+    rows = (
+        _scoped(db.query(*columns), model, date_from, date_to, user_email, environment, search)
+        .order_by(model.created_at.desc())
+        .all()
+    )
+    return [schema(**r._mapping) for r in rows]
+
+
 @router.get("/created-events", response_model=Page[CreatedEventDetail], dependencies=[Depends(verify_dashboard_token)])
 def created_events(
     date_from: date = Query(alias="from"),
@@ -446,6 +520,32 @@ def created_events(
         ),
         CreatedEventDetail,
         date_from, date_to, user_email, environment, search, page, page_size,
+    )
+
+
+@router.get(
+    "/created-events/export", response_model=List[CreatedEventDetail], dependencies=[Depends(verify_dashboard_token)]
+)
+def created_events_export(
+    date_from: date = Query(alias="from"),
+    date_to: date = Query(alias="to"),
+    user_email: Optional[List[str]] = Query(default=None),
+    environment: Optional[List[str]] = Query(default=None),
+    search: Optional[str] = Query(default=None),
+    db: Session = Depends(get_db),
+) -> List[CreatedEventDetail]:
+    return _export_events(
+        db,
+        TestCaseCreatedEvent,
+        (
+            TestCaseCreatedEvent.user_email,
+            TestCaseCreatedEvent.environment,
+            TestCaseCreatedEvent.interface_name,
+            TestCaseCreatedEvent.test_case_name,
+            TestCaseCreatedEvent.created_at,
+        ),
+        CreatedEventDetail,
+        date_from, date_to, user_email, environment, search,
     )
 
 
@@ -478,6 +578,32 @@ def executed_events(
 
 
 @router.get(
+    "/executed-events/export", response_model=List[ExecutedEventDetail], dependencies=[Depends(verify_dashboard_token)]
+)
+def executed_events_export(
+    date_from: date = Query(alias="from"),
+    date_to: date = Query(alias="to"),
+    user_email: Optional[List[str]] = Query(default=None),
+    environment: Optional[List[str]] = Query(default=None),
+    search: Optional[str] = Query(default=None),
+    db: Session = Depends(get_db),
+) -> List[ExecutedEventDetail]:
+    return _export_events(
+        db,
+        TestCaseExecutedEvent,
+        (
+            TestCaseExecutedEvent.user_email,
+            TestCaseExecutedEvent.environment,
+            TestCaseExecutedEvent.interface_name,
+            TestCaseExecutedEvent.test_case_name,
+            TestCaseExecutedEvent.created_at,
+        ),
+        ExecutedEventDetail,
+        date_from, date_to, user_email, environment, search,
+    )
+
+
+@router.get(
     "/document-events", response_model=Page[DocumentEventDetail], dependencies=[Depends(verify_dashboard_token)]
 )
 def document_events(
@@ -501,6 +627,31 @@ def document_events(
         ),
         DocumentEventDetail,
         date_from, date_to, user_email, environment, search, page, page_size,
+    )
+
+
+@router.get(
+    "/document-events/export", response_model=List[DocumentEventDetail], dependencies=[Depends(verify_dashboard_token)]
+)
+def document_events_export(
+    date_from: date = Query(alias="from"),
+    date_to: date = Query(alias="to"),
+    user_email: Optional[List[str]] = Query(default=None),
+    environment: Optional[List[str]] = Query(default=None),
+    search: Optional[str] = Query(default=None),
+    db: Session = Depends(get_db),
+) -> List[DocumentEventDetail]:
+    return _export_events(
+        db,
+        DocumentGeneratedEvent,
+        (
+            DocumentGeneratedEvent.user_email,
+            DocumentGeneratedEvent.environment,
+            DocumentGeneratedEvent.interface_name,
+            DocumentGeneratedEvent.created_at,
+        ),
+        DocumentEventDetail,
+        date_from, date_to, user_email, environment, search,
     )
 
 
@@ -534,6 +685,117 @@ def test_case_document_events(
         TestCaseDocumentEventDetail,
         date_from, date_to, user_email, environment, search, page, page_size,
     )
+
+
+@router.get(
+    "/test-case-document-events/export",
+    response_model=List[TestCaseDocumentEventDetail],
+    dependencies=[Depends(verify_dashboard_token)],
+)
+def test_case_document_events_export(
+    date_from: date = Query(alias="from"),
+    date_to: date = Query(alias="to"),
+    user_email: Optional[List[str]] = Query(default=None),
+    environment: Optional[List[str]] = Query(default=None),
+    search: Optional[str] = Query(default=None),
+    db: Session = Depends(get_db),
+) -> List[TestCaseDocumentEventDetail]:
+    return _export_events(
+        db,
+        TestCaseDocumentGeneratedEvent,
+        (
+            TestCaseDocumentGeneratedEvent.user_email,
+            TestCaseDocumentGeneratedEvent.environment,
+            TestCaseDocumentGeneratedEvent.interface_name,
+            TestCaseDocumentGeneratedEvent.suite_name,
+            TestCaseDocumentGeneratedEvent.test_case_names,
+            TestCaseDocumentGeneratedEvent.test_case_count,
+            TestCaseDocumentGeneratedEvent.created_at,
+        ),
+        TestCaseDocumentEventDetail,
+        date_from, date_to, user_email, environment, search,
+    )
+
+
+# --- New rollup for the redesign: totals per (user, environment) pair, no
+# day dimension. Feeds the "by user"/"by environment" ranked bars (row/column
+# sums), the heatmap (the raw grid), and the signals (concentration/
+# key-person % are arithmetic on these totals) - one endpoint instead of
+# several bespoke ones. Same UNION ALL + GROUP BY shape as _users_branch,
+# just without the report_date grouping key.
+
+
+def _user_env_branch(
+    model,
+    metric: str,
+    date_from: date,
+    date_to: date,
+    user_email: Optional[List[str]],
+    environment: Optional[List[str]],
+    search: Optional[str],
+):
+    start, end = _range_bounds(date_from, date_to)
+    metric_cols = {
+        "test_cases_created": _ZERO(),
+        "test_cases_executed": _ZERO(),
+        "documents_generated": _ZERO(),
+        "test_case_documents_generated": _ZERO(),
+    }
+    metric_cols[metric] = func.count(model.id)
+
+    q = select(
+        model.user_email.label("user_email"),
+        model.environment.label("environment"),
+        metric_cols["test_cases_created"].label("test_cases_created"),
+        metric_cols["test_cases_executed"].label("test_cases_executed"),
+        metric_cols["documents_generated"].label("documents_generated"),
+        metric_cols["test_case_documents_generated"].label("test_case_documents_generated"),
+    ).where(model.created_at >= start, model.created_at < end)
+    if user_email:
+        q = q.where(model.user_email.in_(user_email))
+    for predicate in _search_predicate(model, environment, search):
+        q = q.where(predicate)
+    return q.group_by(model.user_email, model.environment)
+
+
+@router.get(
+    "/user-environment-rollup",
+    response_model=List[UserEnvironmentStats],
+    dependencies=[Depends(verify_dashboard_token)],
+)
+def user_environment_rollup(
+    date_from: date = Query(alias="from"),
+    date_to: date = Query(alias="to"),
+    user_email: Optional[List[str]] = Query(default=None),
+    environment: Optional[List[str]] = Query(default=None),
+    search: Optional[str] = Query(default=None),
+    db: Session = Depends(get_db),
+) -> List[UserEnvironmentStats]:
+    branches = [
+        _user_env_branch(model, metric, date_from, date_to, user_email, environment, search)
+        for model, metric in (
+            (TestCaseCreatedEvent, "test_cases_created"),
+            (TestCaseExecutedEvent, "test_cases_executed"),
+            (DocumentGeneratedEvent, "documents_generated"),
+            (TestCaseDocumentGeneratedEvent, "test_case_documents_generated"),
+        )
+    ]
+    combined = union_all(*branches).subquery()
+
+    rows = db.execute(
+        select(
+            combined.c.user_email,
+            combined.c.environment,
+            func.sum(combined.c.test_cases_created).label("test_cases_created"),
+            func.sum(combined.c.test_cases_executed).label("test_cases_executed"),
+            func.sum(combined.c.documents_generated).label("documents_generated"),
+            func.sum(combined.c.test_case_documents_generated).label("test_case_documents_generated"),
+        )
+        .group_by(combined.c.user_email, combined.c.environment)
+        .order_by(combined.c.user_email, combined.c.environment)
+    ).all()
+
+    return [UserEnvironmentStats(**row._mapping) for row in rows]
 
 
 @router.get("/user-emails", response_model=List[str], dependencies=[Depends(verify_dashboard_token)])
