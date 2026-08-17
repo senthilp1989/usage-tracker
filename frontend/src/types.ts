@@ -50,6 +50,13 @@ export interface ExecutedEventDetail {
   created_at: string;
 }
 
+export interface DocumentEventDetail {
+  user_email: string;
+  environment: string;
+  interface_name: string;
+  created_at: string;
+}
+
 export interface TestCaseDocumentEventDetail {
   user_email: string;
   environment: string | null;
@@ -65,10 +72,15 @@ export interface DateRange {
   to: string; // YYYY-MM-DD
 }
 
+export interface Page<T> {
+  items: T[];
+  total: number;
+}
+
 export const METRICS = [
   { key: "test_cases_created", label: "Test cases created" },
   { key: "test_cases_executed", label: "Test cases executed" },
-  { key: "documents_generated", label: "Documents generated" },
+  { key: "documents_generated", label: "TSD documents generated" },
   { key: "test_case_documents_generated", label: "Test case documents generated" },
 ] as const;
 

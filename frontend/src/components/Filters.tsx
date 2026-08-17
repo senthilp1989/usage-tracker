@@ -1,7 +1,10 @@
+import DatePicker from "./DatePicker";
 import MultiSelect from "./MultiSelect";
 import type { DateRange } from "../types";
 
 export type Preset = "today" | "7d" | "30d" | "90d" | "custom";
+
+const MAX_CUSTOM_RANGE_DAYS = 90;
 
 export function presetRange(preset: Preset, today: Date): DateRange {
   const iso = (d: Date) => d.toISOString().slice(0, 10);
@@ -20,8 +23,34 @@ export function presetRange(preset: Preset, today: Date): DateRange {
     case "90d":
       return { from: iso(daysAgo(89)), to: iso(today) };
     case "custom":
-      return { from: iso(daysAgo(29)), to: iso(today) };
+      // `to` starts empty - nothing is fetched until the user explicitly
+      // picks an end date (see Dashboard.tsx).
+      return { from: iso(today), to: "" };
   }
+}
+
+function addDays(iso: string, n: number): string {
+  const d = new Date(`${iso}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + n);
+  return d.toISOString().slice(0, 10);
+}
+
+function todayIso(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function minIso(a: string, b: string): string {
+  return a < b ? a : b;
+}
+
+// The native date-picker calendar can only gray out/disable days via the
+// input's own min/max - there's no way to style individual cells - so every
+// bound that makes a date genuinely unselectable (future dates, and the
+// 90-day span cap) has to be reflected in min/max, not just enforced after
+// the fact, or the calendar would show those days as pickable.
+function clampToMaxSpan(from: string, to: string): string {
+  const maxTo = minIso(addDays(from, MAX_CUSTOM_RANGE_DAYS - 1), todayIso());
+  return to > maxTo ? maxTo : to;
 }
 
 interface Props {
@@ -70,19 +99,20 @@ export default function Filters({
       </select>
       {preset === "custom" && (
         <>
-          <input
-            type="date"
+          <DatePicker
             value={range.from}
-            max={range.to}
-            onChange={(e) => onRangeChange({ ...range, from: e.target.value })}
-            aria-label="From date"
+            max={todayIso()}
+            onChange={(from) => onRangeChange({ from, to: "" })}
+            ariaLabel="From date"
+            placeholder="From"
           />
-          <input
-            type="date"
+          <DatePicker
             value={range.to}
             min={range.from}
-            onChange={(e) => onRangeChange({ ...range, to: e.target.value })}
-            aria-label="To date"
+            max={range.from ? minIso(addDays(range.from, MAX_CUSTOM_RANGE_DAYS - 1), todayIso()) : todayIso()}
+            onChange={(to) => onRangeChange({ ...range, to: clampToMaxSpan(range.from, to) })}
+            ariaLabel="To date"
+            placeholder="To"
           />
         </>
       )}

@@ -130,6 +130,124 @@ body {
   pointer-events: none;
 }
 
+.datepicker {
+  position: relative;
+}
+
+.datepicker-trigger {
+  font: inherit;
+  display: inline-flex;
+  align-items: center;
+  color: var(--text-primary);
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 10px;
+  cursor: pointer;
+  min-width: 100px;
+}
+
+.datepicker-trigger:hover {
+  border-color: var(--baseline);
+}
+
+.datepicker-placeholder {
+  color: var(--text-muted);
+}
+
+.datepicker-panel {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 20;
+  width: 240px;
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+  padding: 10px;
+}
+
+.datepicker-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.datepicker-nav {
+  border: none;
+  background: none;
+  padding: 2px 8px;
+  cursor: pointer;
+  color: var(--text-secondary);
+  font-size: 14px;
+}
+
+.datepicker-nav:hover {
+  color: var(--text-primary);
+  border: none;
+}
+
+.datepicker-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.datepicker-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 2px;
+}
+
+.datepicker-weekday {
+  font-size: 11px;
+  color: var(--text-muted);
+  text-align: center;
+  padding: 4px 0;
+}
+
+.datepicker-day {
+  font: inherit;
+  font-size: 12px;
+  text-align: center;
+  padding: 6px 0;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: var(--surface-1);
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.datepicker-day:hover:not(:disabled) {
+  border-color: var(--baseline);
+}
+
+.datepicker-day--empty {
+  visibility: hidden;
+  cursor: default;
+  padding: 6px 0;
+}
+
+.datepicker-day--disabled {
+  color: var(--text-muted);
+  background: var(--page);
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.datepicker-day--selected {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+  font-weight: 600;
+}
+
+.datepicker-day--today {
+  border-color: var(--baseline);
+}
+
 .multiselect {
   position: relative;
 }

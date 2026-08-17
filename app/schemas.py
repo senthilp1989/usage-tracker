@@ -1,10 +1,17 @@
 from datetime import date, datetime
-from typing import List, Optional
+from typing import Generic, List, Optional, TypeVar
 from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, EmailStr, field_serializer
 
 IST = ZoneInfo("Asia/Kolkata")
+
+T = TypeVar("T")
+
+
+class Page(BaseModel, Generic[T]):
+    items: List[T]
+    total: int
 
 
 class UsageReportIn(BaseModel):
@@ -149,6 +156,13 @@ class CreatedEventDetail(BaseModel):
     environment: str
     interface_name: str
     test_case_name: str
+    created_at: datetime
+
+
+class DocumentEventDetail(BaseModel):
+    user_email: str
+    environment: str
+    interface_name: str
     created_at: datetime
 
 

@@ -1,95 +1,59 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { fetchArtifacts, fetchInterfaces } from "../api";
 import type { ArtifactStats, DateRange } from "../types";
-import { fuzzyMatch } from "../fuzzy";
 import MultiSelect from "./MultiSelect";
 
 const PAGE_SIZE = 10;
 
-function csvEscape(value: string | number): string {
-  const s = String(value);
-  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-}
-
-function toCsv(rows: ArtifactStats[]): string {
-  const headers = [
-    "Environment",
-    "Interface",
-    "Test cases created",
-    "Test cases executed",
-    "Documents generated",
-    "Test case documents generated",
-  ];
-  const lines = rows.map((r) =>
-    [
-      r.environment,
-      r.interface_name,
-      r.test_cases_created,
-      r.test_cases_executed,
-      r.documents_generated,
-      r.test_case_documents_generated,
-    ]
-      .map(csvEscape)
-      .join(","),
-  );
-  return [headers.join(","), ...lines].join("\n");
-}
-
-function downloadCsv(rows: ArtifactStats[], range?: DateRange) {
-  const blob = new Blob([toCsv(rows)], { type: "text/csv;charset=utf-8;" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = `usage-by-interface${range ? `_${range.from}_to_${range.to}` : ""}.csv`;
-  a.click();
-  URL.revokeObjectURL(url);
-}
-
 // Date range, user, environment (dropdown), and interface filtering are all
-// done server-side via query params on GET /dashboard/artifacts. The one
-// exception is the global search box: like Users/CreatedEvents/ExecutedEvents,
-// the environment dropdown is bypassed while searching, so rows are narrowed
-// client-side by the search term instead (see the `rows` useMemo above).
+// done server-side via query params on GET /dashboard/artifacts. `search`
+// (the global search box) is likewise resolved server-side, mutually
+// exclusive with the environment dropdown - same convention as the other
+// tables.
 export default function ArtifactsPanel({
   range,
   userEmails,
   environment,
-  searchActive,
-  searchTerm,
+  search,
 }: {
   range: DateRange;
   userEmails: string[];
   environment: string[];
-  searchActive: boolean;
-  searchTerm: string;
+  search?: string;
 }) {
   const [interfaceNames, setInterfaceNames] = useState<string[]>([]);
   const [interfaceOptions, setInterfaceOptions] = useState<string[]>([]);
-  const [rawRows, setRawRows] = useState<ArtifactStats[]>([]);
+  const [items, setItems] = useState<ArtifactStats[]>([]);
+  const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState(false);
-
-  // The environment dropdown filter is bypassed (empty) while a search is
-  // active - same convention as Users/CreatedEvents/ExecutedEvents - so this
-  // narrows the already-fetched rows by the search term client-side instead.
-  const rows = useMemo(
-    () => (searchActive ? rawRows.filter((r) => fuzzyMatch(searchTerm, r.environment)) : rawRows),
-    [rawRows, searchActive, searchTerm],
-  );
+  const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
   useEffect(() => {
     fetchInterfaces().then(setInterfaceOptions).catch(() => undefined);
   }, []);
 
   useEffect(() => {
+    setPage(1);
+  }, [range.from, range.to, userEmails.join(","), environment.join(","), interfaceNames.join(","), search]);
+
+  useEffect(() => {
+    if (!range.to) {
+      setItems([]);
+      setTotal(0);
+      setError(null);
+      setLoading(false);
+      return;
+    }
     let cancelled = false;
     setLoading(true);
-    fetchArtifacts(range, userEmails, environment, interfaceNames)
+    fetchArtifacts(range, page, PAGE_SIZE, userEmails, environment, interfaceNames, search)
       .then((data) => {
         if (cancelled) return;
-        setRawRows(data);
+        setItems(data.items);
+        setTotal(data.total);
         setError(null);
       })
       .catch(() => {
@@ -100,17 +64,7 @@ export default function ArtifactsPanel({
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [range.from, range.to, userEmails.join(","), environment.join(","), interfaceNames.join(",")]);
-
-  useEffect(() => {
-    setPage(1);
-  }, [rows]);
-
-  const pageCount = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
-  const pageRows = useMemo(() => {
-    const start = (page - 1) * PAGE_SIZE;
-    return rows.slice(start, start + PAGE_SIZE);
-  }, [rows, page]);
+  }, [range.from, range.to, userEmails.join(","), environment.join(","), interfaceNames.join(","), search, page]);
 
   return (
     <div className={`card${loading ? " loading-dim" : ""}`}>
@@ -124,9 +78,8 @@ export default function ArtifactsPanel({
           <span className={`collapse-arrow${expanded ? " expanded" : ""}`} aria-hidden="true">
             ▸
           </span>
-          Usage by interface ({rows.length.toLocaleString()})
+          Usage by interface ({total.toLocaleString()})
         </button>
-        {expanded && rows.length > 0 && <button onClick={() => downloadCsv(rows, range)}>Download CSV</button>}
       </div>
       {expanded && (
         <>
@@ -140,7 +93,7 @@ export default function ArtifactsPanel({
             />
           </div>
           {error && <div className="card login-error">{error}</div>}
-          {rows.length === 0 ? (
+          {total === 0 ? (
             <div className="empty-note">No interface activity in this range yet.</div>
           ) : (
             <>
@@ -151,12 +104,12 @@ export default function ArtifactsPanel({
                     <th>Interface</th>
                     <th className="num">Test cases created</th>
                     <th className="num">Test cases executed</th>
-                    <th className="num">Documents generated</th>
+                    <th className="num">TSD documents generated</th>
                     <th className="num">Test case documents generated</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {pageRows.map((r) => (
+                  {items.map((r) => (
                     <tr key={`${r.environment}-${r.interface_name}`}>
                       <td>{r.environment}</td>
                       <td>{r.interface_name}</td>
@@ -171,7 +124,7 @@ export default function ArtifactsPanel({
               {pageCount > 1 && (
                 <div className="pagination">
                   <span className="pagination-info">
-                    Page {page} of {pageCount} &middot; {rows.length.toLocaleString()} rows
+                    Page {page} of {pageCount} &middot; {total.toLocaleString()} rows
                   </span>
                   <div className="pagination-controls">
                     <button onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page === 1}>

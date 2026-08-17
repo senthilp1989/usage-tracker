@@ -1,10 +1,10 @@
 import { useEffect, useState } from "react";
-import { fetchUsers } from "../api";
-import { METRICS, type DateRange, type UserStats } from "../types";
+import { fetchDocumentEvents } from "../api";
+import type { DateRange, DocumentEventDetail } from "../types";
 
 const PAGE_SIZE = 10;
 
-export default function UsersTable({
+export default function DocumentEventsTable({
   range,
   userEmails,
   environment,
@@ -15,9 +15,9 @@ export default function UsersTable({
   environment: string[];
   search?: string;
 }) {
-  const [page, setPage] = useState(1);
   const [expanded, setExpanded] = useState(false);
-  const [items, setItems] = useState<UserStats[]>([]);
+  const [page, setPage] = useState(1);
+  const [items, setItems] = useState<DocumentEventDetail[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -37,7 +37,7 @@ export default function UsersTable({
     }
     let cancelled = false;
     setLoading(true);
-    fetchUsers(range, page, PAGE_SIZE, userEmails, environment, search)
+    fetchDocumentEvents(range, page, PAGE_SIZE, userEmails, environment, search)
       .then((data) => {
         if (cancelled) return;
         setItems(data.items);
@@ -45,7 +45,7 @@ export default function UsersTable({
         setError(null);
       })
       .catch(() => {
-        if (!cancelled) setError("Could not load usage by user.");
+        if (!cancelled) setError("Could not load TSD documents generated.");
       })
       .finally(() => !cancelled && setLoading(false));
     return () => {
@@ -66,14 +66,14 @@ export default function UsersTable({
           <span className={`collapse-arrow${expanded ? " expanded" : ""}`} aria-hidden="true">
             ▸
           </span>
-          Usage by user ({total.toLocaleString()})
+          TSD documents generated ({total.toLocaleString()})
         </button>
       </div>
       {expanded && (
         <>
           {error && <div className="card login-error">{error}</div>}
           {total === 0 ? (
-            <div className="empty-note">No events in this range yet.</div>
+            <div className="empty-note">No TSD documents generated in this range yet.</div>
           ) : (
             <>
               <table>
@@ -81,25 +81,15 @@ export default function UsersTable({
                   <tr>
                     <th>Email</th>
                     <th>Environment</th>
-                    <th>Date</th>
-                    {METRICS.map((m) => (
-                      <th className="num" key={m.key}>
-                        {m.label}
-                      </th>
-                    ))}
+                    <th>Interface</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {items.map((r) => (
-                    <tr key={`${r.user_email}-${r.environment}-${r.report_date}`}>
+                  {items.map((r, i) => (
+                    <tr key={`${r.user_email}-${r.environment}-${r.interface_name}-${i}`}>
                       <td>{r.user_email}</td>
                       <td>{r.environment}</td>
-                      <td>{r.report_date}</td>
-                      {METRICS.map((m) => (
-                        <td className="num" key={m.key}>
-                          {r[m.key].toLocaleString()}
-                        </td>
-                      ))}
+                      <td>{r.interface_name}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -110,16 +100,10 @@ export default function UsersTable({
                     Page {page} of {pageCount} &middot; {total.toLocaleString()} rows
                   </span>
                   <div className="pagination-controls">
-                    <button
-                      onClick={() => setPage((p) => Math.max(1, p - 1))}
-                      disabled={page === 1}
-                    >
+                    <button onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page === 1}>
                       Previous
                     </button>
-                    <button
-                      onClick={() => setPage((p) => Math.min(pageCount, p + 1))}
-                      disabled={page === pageCount}
-                    >
+                    <button onClick={() => setPage((p) => Math.min(pageCount, p + 1))} disabled={page === pageCount}>
                       Next
                     </button>
                   </div>

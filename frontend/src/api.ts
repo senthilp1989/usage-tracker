@@ -3,7 +3,9 @@ import type {
   CreatedEventDetail,
   DailyStats,
   DateRange,
+  DocumentEventDetail,
   ExecutedEventDetail,
+  Page,
   StatsSummary,
   TestCaseDocumentEventDetail,
   UserStats,
@@ -49,31 +51,83 @@ export async function login(username: string, password: string): Promise<void> {
   localStorage.setItem(TOKEN_KEY, data.token);
 }
 
-function scope(range: DateRange, userEmails?: string[], environmentIds?: string[]): string {
+// `search` and `environmentIds` are mutually exclusive on the backend (search
+// overrides the environment dropdown) - when both are passed, search wins.
+function scope(range: DateRange, userEmails?: string[], environmentIds?: string[], search?: string): string {
   const params = new URLSearchParams({ from: range.from, to: range.to });
   (userEmails ?? []).forEach((email) => params.append("user_email", email));
-  (environmentIds ?? []).forEach((id) => params.append("environment", id));
+  if (search) {
+    params.set("search", search);
+  } else {
+    (environmentIds ?? []).forEach((id) => params.append("environment", id));
+  }
   return params.toString();
 }
 
-export const fetchSummary = (range: DateRange, userEmails?: string[], environmentIds?: string[]) =>
-  request<StatsSummary>(`/dashboard/summary?${scope(range, userEmails, environmentIds)}`);
+export const fetchSummary = (range: DateRange, userEmails?: string[], environmentIds?: string[], search?: string) =>
+  request<StatsSummary>(`/dashboard/summary?${scope(range, userEmails, environmentIds, search)}`);
 
-export const fetchDaily = (range: DateRange, userEmails?: string[], environmentIds?: string[]) =>
-  request<DailyStats[]>(`/dashboard/daily?${scope(range, userEmails, environmentIds)}`);
+export const fetchDaily = (range: DateRange, userEmails?: string[], environmentIds?: string[], search?: string) =>
+  request<DailyStats[]>(`/dashboard/daily?${scope(range, userEmails, environmentIds, search)}`);
 
-export const fetchUsers = (range: DateRange, userEmails?: string[], environmentIds?: string[]) =>
-  request<UserStats[]>(`/dashboard/users?${scope(range, userEmails, environmentIds)}`);
+export const fetchUsers = (
+  range: DateRange,
+  page: number,
+  pageSize: number,
+  userEmails?: string[],
+  environmentIds?: string[],
+  search?: string,
+) =>
+  request<Page<UserStats>>(
+    `/dashboard/users?${scope(range, userEmails, environmentIds, search)}&page=${page}&page_size=${pageSize}`,
+  );
 
-export const fetchCreatedEvents = (range: DateRange, userEmails?: string[], environmentIds?: string[]) =>
-  request<CreatedEventDetail[]>(`/dashboard/created-events?${scope(range, userEmails, environmentIds)}`);
+export const fetchCreatedEvents = (
+  range: DateRange,
+  page: number,
+  pageSize: number,
+  userEmails?: string[],
+  environmentIds?: string[],
+  search?: string,
+) =>
+  request<Page<CreatedEventDetail>>(
+    `/dashboard/created-events?${scope(range, userEmails, environmentIds, search)}&page=${page}&page_size=${pageSize}`,
+  );
 
-export const fetchExecutedEvents = (range: DateRange, userEmails?: string[], environmentIds?: string[]) =>
-  request<ExecutedEventDetail[]>(`/dashboard/executed-events?${scope(range, userEmails, environmentIds)}`);
+export const fetchExecutedEvents = (
+  range: DateRange,
+  page: number,
+  pageSize: number,
+  userEmails?: string[],
+  environmentIds?: string[],
+  search?: string,
+) =>
+  request<Page<ExecutedEventDetail>>(
+    `/dashboard/executed-events?${scope(range, userEmails, environmentIds, search)}&page=${page}&page_size=${pageSize}`,
+  );
 
-export const fetchTestCaseDocumentEvents = (range: DateRange, userEmails?: string[], environmentIds?: string[]) =>
-  request<TestCaseDocumentEventDetail[]>(
-    `/dashboard/test-case-document-events?${scope(range, userEmails, environmentIds)}`,
+export const fetchDocumentEvents = (
+  range: DateRange,
+  page: number,
+  pageSize: number,
+  userEmails?: string[],
+  environmentIds?: string[],
+  search?: string,
+) =>
+  request<Page<DocumentEventDetail>>(
+    `/dashboard/document-events?${scope(range, userEmails, environmentIds, search)}&page=${page}&page_size=${pageSize}`,
+  );
+
+export const fetchTestCaseDocumentEvents = (
+  range: DateRange,
+  page: number,
+  pageSize: number,
+  userEmails?: string[],
+  environmentIds?: string[],
+  search?: string,
+) =>
+  request<Page<TestCaseDocumentEventDetail>>(
+    `/dashboard/test-case-document-events?${scope(range, userEmails, environmentIds, search)}&page=${page}&page_size=${pageSize}`,
   );
 
 export const fetchUserEmails = () =>
@@ -87,20 +141,24 @@ function artifactScope(
   userEmails?: string[],
   environmentIds?: string[],
   interfaceNames?: string[],
+  search?: string,
 ): string {
-  const params = new URLSearchParams({ from: range.from, to: range.to });
-  (userEmails ?? []).forEach((email) => params.append("user_email", email));
-  (environmentIds ?? []).forEach((id) => params.append("environment", id));
+  const params = new URLSearchParams(scope(range, userEmails, environmentIds, search));
   (interfaceNames ?? []).forEach((iface) => params.append("interface_name", iface));
   return params.toString();
 }
 
 export const fetchArtifacts = (
   range: DateRange,
+  page: number,
+  pageSize: number,
   userEmails?: string[],
   environmentIds?: string[],
   interfaceNames?: string[],
+  search?: string,
 ) =>
-  request<ArtifactStats[]>(`/dashboard/artifacts?${artifactScope(range, userEmails, environmentIds, interfaceNames)}`);
+  request<Page<ArtifactStats>>(
+    `/dashboard/artifacts?${artifactScope(range, userEmails, environmentIds, interfaceNames, search)}&page=${page}&page_size=${pageSize}`,
+  );
 
 export const fetchInterfaces = () => request<string[]>("/dashboard/interfaces");

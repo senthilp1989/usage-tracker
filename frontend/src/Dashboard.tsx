@@ -1,18 +1,15 @@
 import { useEffect, useMemo, useState } from "react";
 import {
-  fetchCreatedEvents,
   fetchDaily,
   fetchEnvironmentIds,
-  fetchExecutedEvents,
   fetchSummary,
-  fetchTestCaseDocumentEvents,
   fetchUserEmails,
-  fetchUsers,
   UnauthorizedError,
 } from "./api";
 import ArtifactsPanel from "./components/ArtifactsPanel";
 import CreatedEventsTable from "./components/CreatedEventsTable";
 import DailyTrend from "./components/DailyTrend";
+import DocumentEventsTable from "./components/DocumentEventsTable";
 import ExecutedEventsTable from "./components/ExecutedEventsTable";
 import Filters, { presetRange, type Preset } from "./components/Filters";
 import StatTile from "./components/StatTile";
@@ -20,17 +17,7 @@ import TestCaseDocumentEventsTable from "./components/TestCaseDocumentEventsTabl
 import ThemeToggle from "./components/ThemeToggle";
 import UsersTable from "./components/UsersTable";
 import type { Theme } from "./theme";
-import {
-  METRICS,
-  type CreatedEventDetail,
-  type DailyStats,
-  type DateRange,
-  type ExecutedEventDetail,
-  type StatsSummary,
-  type TestCaseDocumentEventDetail,
-  type UserStats,
-} from "./types";
-import { fuzzyMatch } from "./fuzzy";
+import { type DailyStats, type DateRange, type StatsSummary } from "./types";
 
 const MIN_SEARCH_LEN = 2;
 
@@ -55,35 +42,6 @@ function zeroFill(range: DateRange, rows: DailyStats[]): DailyStats[] {
   return out;
 }
 
-function summarizeRows(rows: UserStats[]): StatsSummary {
-  const totals = {
-    test_cases_created: 0,
-    test_cases_executed: 0,
-    documents_generated: 0,
-    test_case_documents_generated: 0,
-  };
-  for (const row of rows) {
-    for (const metric of METRICS) totals[metric.key] += row[metric.key];
-  }
-  return { users_reporting: new Set(rows.map((r) => r.user_email)).size, ...totals };
-}
-
-function dailyFromRows(rows: UserStats[]): DailyStats[] {
-  const byDay = new Map<string, DailyStats>();
-  for (const row of rows) {
-    const entry = byDay.get(row.report_date) ?? {
-      day: row.report_date,
-      test_cases_created: 0,
-      test_cases_executed: 0,
-      documents_generated: 0,
-      test_case_documents_generated: 0,
-    };
-    for (const metric of METRICS) entry[metric.key] += row[metric.key];
-    byDay.set(row.report_date, entry);
-  }
-  return Array.from(byDay.values()).sort((a, b) => a.day.localeCompare(b.day));
-}
-
 export default function Dashboard({
   onLogout,
   theme,
@@ -103,18 +61,14 @@ export default function Dashboard({
   const [environmentIds, setEnvironmentIds] = useState<string[]>([]);
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
-  const [serverSummary, setServerSummary] = useState<StatsSummary | null>(null);
-  const [serverDaily, setServerDaily] = useState<DailyStats[]>([]);
-  const [rawUsers, setRawUsers] = useState<UserStats[]>([]);
-  const [rawCreatedEvents, setRawCreatedEvents] = useState<CreatedEventDetail[]>([]);
-  const [rawExecutedEvents, setRawExecutedEvents] = useState<ExecutedEventDetail[]>([]);
-  const [rawTestCaseDocumentEvents, setRawTestCaseDocumentEvents] = useState<TestCaseDocumentEventDetail[]>([]);
+  const [summary, setSummary] = useState<StatsSummary | null>(null);
+  const [daily, setDaily] = useState<DailyStats[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   function applyPreset(p: Preset) {
     setPreset(p);
-    if (p !== "custom") setRange(presetRange(p, new Date()));
+    setRange(presetRange(p, new Date()));
   }
 
   useEffect(() => {
@@ -123,35 +77,37 @@ export default function Dashboard({
   }, [search]);
 
   const searchActive = debouncedSearch.trim().length >= MIN_SEARCH_LEN;
-  // While searching, the search term overrides the two dropdown filters —
-  // scope the fetch to the date range alone and let the client-side fuzzy
-  // filter below narrow it further, instead of asking the server for an
-  // ID list (a broad term like "ta" could match dozens of emails sharing a
-  // domain, which doesn't compose sensibly with the dropdown filters anyway).
+  // While searching, the search term overrides the two dropdown filters -
+  // it's resolved server-side against the environment column, and doesn't
+  // compose sensibly with the dropdown filters anyway.
   const scopedUser = searchActive ? [] : user;
   const scopedEnvironment = searchActive ? [] : environment;
+  const searchParam = searchActive ? debouncedSearch : undefined;
 
   useEffect(() => {
+    // Custom range starts with `to` empty (see Filters.tsx) - nothing is
+    // fetched until the user picks an end date. Reset to the same zero
+    // state a legitimately empty result set would produce, so the UI reads
+    // as "no records" rather than a distinct "pick a date" mode.
+    if (!range.to) {
+      setSummary(null);
+      setDaily([]);
+      setError(null);
+      setLoading(false);
+      return;
+    }
     let cancelled = false;
     setLoading(true);
     Promise.all([
-      fetchSummary(range, scopedUser, scopedEnvironment),
-      fetchDaily(range, scopedUser, scopedEnvironment),
-      fetchUsers(range, scopedUser, scopedEnvironment),
-      fetchCreatedEvents(range, scopedUser, scopedEnvironment),
-      fetchExecutedEvents(range, scopedUser, scopedEnvironment),
-      fetchTestCaseDocumentEvents(range, scopedUser, scopedEnvironment),
+      fetchSummary(range, scopedUser, scopedEnvironment, searchParam),
+      fetchDaily(range, scopedUser, scopedEnvironment, searchParam),
       fetchUserEmails(),
       fetchEnvironmentIds(),
     ])
-      .then(([s, d, u, created, executed, testCaseDocuments, emails, envIds]) => {
+      .then(([s, d, emails, envIds]) => {
         if (cancelled) return;
-        setServerSummary(s);
-        setServerDaily(d);
-        setRawUsers(u);
-        setRawCreatedEvents(created);
-        setRawExecutedEvents(executed);
-        setRawTestCaseDocumentEvents(testCaseDocuments);
+        setSummary(s);
+        setDaily(d);
         setUserEmails(emails);
         setEnvironmentIds(envIds);
         setError(null);
@@ -166,39 +122,9 @@ export default function Dashboard({
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [range.from, range.to, scopedUser.join(","), scopedEnvironment.join(","), searchActive]);
+  }, [range.from, range.to, scopedUser.join(","), scopedEnvironment.join(","), searchParam]);
 
-  const users = useMemo(
-    () =>
-      searchActive
-        ? rawUsers.filter((r) => fuzzyMatch(debouncedSearch, r.environment))
-        : rawUsers,
-    [rawUsers, searchActive, debouncedSearch],
-  );
-  const createdEvents = useMemo(
-    () =>
-      searchActive
-        ? rawCreatedEvents.filter((r) => fuzzyMatch(debouncedSearch, r.environment))
-        : rawCreatedEvents,
-    [rawCreatedEvents, searchActive, debouncedSearch],
-  );
-  const executedEvents = useMemo(
-    () =>
-      searchActive
-        ? rawExecutedEvents.filter((r) => fuzzyMatch(debouncedSearch, r.environment))
-        : rawExecutedEvents,
-    [rawExecutedEvents, searchActive, debouncedSearch],
-  );
-  const testCaseDocumentEvents = useMemo(
-    () =>
-      searchActive
-        ? rawTestCaseDocumentEvents.filter((r) => fuzzyMatch(debouncedSearch, r.environment ?? ""))
-        : rawTestCaseDocumentEvents,
-    [rawTestCaseDocumentEvents, searchActive, debouncedSearch],
-  );
-  const summary = searchActive ? summarizeRows(users) : serverSummary;
-  const daily = searchActive ? dailyFromRows(users) : serverDaily;
-  const searchHasNoMatches = searchActive && users.length === 0;
+  const searchHasNoMatches = searchActive && summary !== null && summary.users_reporting === 0;
 
   const filled = useMemo(() => zeroFill(range, daily), [range, daily]);
 
@@ -243,7 +169,7 @@ export default function Dashboard({
             value={summary?.test_cases_created ?? 0}
           />
           <StatTile
-            label="Documents generated"
+            label="TSD documents generated"
             value={summary?.documents_generated ?? 0}
           />
           <StatTile
@@ -256,17 +182,17 @@ export default function Dashboard({
           />
         </div>
         <DailyTrend data={filled} />
-        <UsersTable rows={users} range={range} />
-        <CreatedEventsTable rows={createdEvents} range={range} />
-        <ExecutedEventsTable rows={executedEvents} range={range} />
-        <TestCaseDocumentEventsTable rows={testCaseDocumentEvents} range={range} />
-        <ArtifactsPanel
+        <UsersTable range={range} userEmails={scopedUser} environment={scopedEnvironment} search={searchParam} />
+        <CreatedEventsTable range={range} userEmails={scopedUser} environment={scopedEnvironment} search={searchParam} />
+        <ExecutedEventsTable range={range} userEmails={scopedUser} environment={scopedEnvironment} search={searchParam} />
+        <DocumentEventsTable range={range} userEmails={scopedUser} environment={scopedEnvironment} search={searchParam} />
+        <TestCaseDocumentEventsTable
           range={range}
           userEmails={scopedUser}
           environment={scopedEnvironment}
-          searchActive={searchActive}
-          searchTerm={debouncedSearch}
+          search={searchParam}
         />
+        <ArtifactsPanel range={range} userEmails={scopedUser} environment={scopedEnvironment} search={searchParam} />
       </main>
     </>
   );
