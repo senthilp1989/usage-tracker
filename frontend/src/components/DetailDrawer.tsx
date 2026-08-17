@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   fetchCreatedEvents,
   fetchCreatedEventsExport,
@@ -18,6 +18,9 @@ import {
 } from "../types";
 
 const PAGE_SIZE = 10;
+// Expanded takes over the viewport, so it can show a screenful instead of
+// paging through ten rows at a time.
+const EXPANDED_PAGE_SIZE = 25;
 
 type Cell = string | number;
 type Row = Cell[];
@@ -70,6 +73,9 @@ export default function DetailDrawer({
   const [loaded, setLoaded] = useState<Partial<Record<LazyTabId, Row[]>>>({});
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState(false);
+  const panelRef = useRef<HTMLElement>(null);
+  const expandBtnRef = useRef<HTMLButtonElement>(null);
 
   // Every cached row set belongs to one filter scope; changing the scope
   // invalidates all of it rather than letting a stale tab linger.
@@ -338,9 +344,40 @@ export default function DetailDrawer({
     return rows;
   }, [active, query, sort]);
 
-  const pageCount = Math.max(1, Math.ceil(view.length / PAGE_SIZE));
+  const pageSize = expanded ? EXPANDED_PAGE_SIZE : PAGE_SIZE;
+  const pageCount = Math.max(1, Math.ceil(view.length / pageSize));
   const current = Math.min(page, pageCount - 1);
-  const visible = view.slice(current * PAGE_SIZE, (current + 1) * PAGE_SIZE);
+  const visible = view.slice(current * pageSize, (current + 1) * pageSize);
+
+  function toggleExpand() {
+    const next = !expanded;
+    // Page size changes with the mode, so re-derive the page from the row the
+    // user is actually looking at - otherwise expanding jumps them elsewhere
+    // in the table.
+    const firstRow = current * pageSize;
+    setPage(Math.floor(firstRow / (next ? EXPANDED_PAGE_SIZE : PAGE_SIZE)));
+    setExpanded(next);
+  }
+
+  // Escape closes, the page behind stops scrolling, and focus moves into the
+  // panel so the keyboard doesn't stay stranded on the page underneath.
+  useEffect(() => {
+    if (!expanded) return;
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape") {
+        setExpanded(false);
+        expandBtnRef.current?.focus();
+      }
+    }
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    document.addEventListener("keydown", onKeyDown);
+    panelRef.current?.focus();
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [expanded]);
 
   function selectTab(i: number) {
     setTab(i);
@@ -350,163 +387,216 @@ export default function DetailDrawer({
   }
 
   return (
-    <section className="card" style={{ overflow: "hidden" }}>
-      <div className="tabs" role="tablist">
-        {tabs.map((t, i) => (
-          <button
-            key={t.id}
-            role="tab"
-            aria-selected={i === tab}
-            onClick={() => selectTab(i)}
-          >
-            {t.name} <span className="cnt">({fmt(t.count)})</span>
-          </button>
-        ))}
-      </div>
-      <div className="tbl-tools">
-        <div className="search">
-          <svg
-            width="14"
-            height="14"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            style={{ color: "var(--muted)", flex: "none" }}
-            aria-hidden="true"
-          >
-            <circle cx="11" cy="11" r="7" />
-            <path d="m20 20-3.5-3.5" />
-          </svg>
-          <input
-            type="search"
-            value={query}
-            onChange={(e) => {
-              setQuery(e.target.value);
-              setPage(0);
-            }}
-            placeholder="Filter rows…"
-            aria-label="Filter rows"
-          />
+    <>
+      {expanded && <div className="detail-backdrop" onClick={toggleExpand} />}
+      <section
+        className={`card detail-card${expanded ? " is-expanded" : ""}`}
+        ref={panelRef}
+        tabIndex={expanded ? -1 : undefined}
+        role={expanded ? "dialog" : undefined}
+        aria-modal={expanded ? true : undefined}
+        aria-label={expanded ? "Detail records, expanded" : undefined}
+      >
+        <div className="tabs" role="tablist">
+          {tabs.map((t, i) => (
+            <button
+              key={t.id}
+              role="tab"
+              aria-selected={i === tab}
+              onClick={() => selectTab(i)}
+            >
+              {t.name} <span className="cnt">({fmt(t.count)})</span>
+            </button>
+          ))}
         </div>
-        <div style={{ flex: 1 }} />
-        <span style={{ fontSize: 12.5, color: "var(--muted)" }}>
-          {fmt(view.length)} record{view.length === 1 ? "" : "s"}
-        </span>
-        <button
-          className="btn"
-          disabled={view.length === 0}
-          onClick={() =>
-            downloadCsv(
-              `testease-${active.id}.csv`,
-              active.columns.map((c) => c.label),
-              view,
-            )
-          }
-        >
-          <svg
-            width="14"
-            height="14"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-            aria-hidden="true"
+        <div className="tbl-tools">
+          <div className="search">
+            <svg
+              width="14"
+              height="14"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              style={{ color: "var(--muted)", flex: "none" }}
+              aria-hidden="true"
+            >
+              <circle cx="11" cy="11" r="7" />
+              <path d="m20 20-3.5-3.5" />
+            </svg>
+            <input
+              type="search"
+              value={query}
+              onChange={(e) => {
+                setQuery(e.target.value);
+                setPage(0);
+              }}
+              placeholder="Filter rows…"
+              aria-label="Filter rows"
+            />
+          </div>
+          <div style={{ flex: 1 }} />
+          <span style={{ fontSize: 12.5, color: "var(--muted)" }}>
+            {fmt(view.length)} record{view.length === 1 ? "" : "s"}
+          </span>
+          <button
+            className="btn"
+            disabled={view.length === 0}
+            onClick={() =>
+              downloadCsv(
+                `testease-${active.id}.csv`,
+                active.columns.map((c) => c.label),
+                view,
+              )
+            }
           >
-            <path d="M12 3v12M7 10l5 5 5-5M4 20h16" />
-          </svg>
-          Download CSV
-        </button>
-      </div>
-      <div className={`tbl-scroll${loading ? " loading-dim" : ""}`}>
-        {error ? (
-          <div className="empty">{error}</div>
-        ) : active.rows === undefined ? (
-          <div className="empty">Loading records…</div>
-        ) : (
-          <table className="data">
-            <thead>
-              <tr>
-                {active.columns.map((c, i) => (
-                  <th key={c.label} className={c.numeric ? "n" : undefined}>
-                    <button
-                      onClick={() =>
-                        setSort((s) =>
-                          s && s.col === i
-                            ? { col: i, dir: -s.dir as 1 | -1 }
-                            : { col: i, dir: -1 },
-                        )
-                      }
-                    >
-                      {c.label}
-                      {sort?.col === i && (
-                        <span aria-hidden="true">
-                          {sort.dir > 0 ? "↑" : "↓"}
-                        </span>
-                      )}
-                    </button>
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {visible.length === 0 ? (
+            <svg
+              width="14"
+              height="14"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              aria-hidden="true"
+            >
+              <path d="M12 3v12M7 10l5 5 5-5M4 20h16" />
+            </svg>
+            Download CSV
+          </button>
+          <button
+            className="btn"
+            ref={expandBtnRef}
+            onClick={toggleExpand}
+            aria-expanded={expanded}
+            title={
+              expanded ? "Exit full screen (Esc)" : "Expand to full screen"
+            }
+          >
+            {expanded ? (
+              <svg
+                width="14"
+                height="14"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
+                <path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5" />
+              </svg>
+            ) : (
+              <svg
+                width="14"
+                height="14"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
+                <path d="M9 3H3v6M21 9V3h-6M9 21H3v-6M15 21h6v-6" />
+              </svg>
+            )}
+            {expanded ? "Exit full screen" : "Expand"}
+          </button>
+        </div>
+        <div className={`tbl-scroll${loading ? " loading-dim" : ""}`}>
+          {error ? (
+            <div className="empty">{error}</div>
+          ) : active.rows === undefined ? (
+            <div className="empty">Loading records…</div>
+          ) : (
+            <table className="data">
+              <thead>
                 <tr>
-                  <td className="empty" colSpan={active.columns.length}>
-                    No matching records
-                  </td>
+                  {active.columns.map((c, i) => (
+                    <th key={c.label} className={c.numeric ? "n" : undefined}>
+                      <button
+                        onClick={() =>
+                          setSort((s) =>
+                            s && s.col === i
+                              ? { col: i, dir: -s.dir as 1 | -1 }
+                              : { col: i, dir: -1 },
+                          )
+                        }
+                      >
+                        {c.label}
+                        {sort?.col === i && (
+                          <span aria-hidden="true">
+                            {sort.dir > 0 ? "↑" : "↓"}
+                          </span>
+                        )}
+                      </button>
+                    </th>
+                  ))}
                 </tr>
-              ) : (
-                visible.map((r, ri) => (
-                  <tr key={`${current}-${ri}`}>
-                    {r.map((c, ci) => {
-                      const col = active.columns[ci];
-                      if (col.numeric)
-                        return (
-                          <td className={`n${c ? "" : " zero"}`} key={ci}>
-                            {fmt(Number(c))}
-                          </td>
-                        );
-                      if (col.mono)
-                        return (
-                          <td key={ci}>
-                            <span className="mono">{String(c)}</span>
-                          </td>
-                        );
-                      if (col.tag)
-                        return (
-                          <td key={ci}>
-                            <span className="tag">{String(c)}</span>
-                          </td>
-                        );
-                      return (
-                        <td key={ci} className={col.wrap ? "wrap" : undefined}>
-                          {String(c)}
-                        </td>
-                      );
-                    })}
+              </thead>
+              <tbody>
+                {visible.length === 0 ? (
+                  <tr>
+                    <td className="empty" colSpan={active.columns.length}>
+                      No matching records
+                    </td>
                   </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        )}
-      </div>
-      <div className="pager">
-        <span>
-          Page {current + 1} of {pageCount}
-        </span>
-        <button disabled={current === 0} onClick={() => setPage(current - 1)}>
-          Previous
-        </button>
-        <button
-          disabled={current >= pageCount - 1}
-          onClick={() => setPage(current + 1)}
-        >
-          Next
-        </button>
-      </div>
-    </section>
+                ) : (
+                  visible.map((r, ri) => (
+                    <tr key={`${current}-${ri}`}>
+                      {r.map((c, ci) => {
+                        const col = active.columns[ci];
+                        if (col.numeric)
+                          return (
+                            <td className={`n${c ? "" : " zero"}`} key={ci}>
+                              {fmt(Number(c))}
+                            </td>
+                          );
+                        if (col.mono)
+                          return (
+                            <td key={ci}>
+                              <span className="mono">{String(c)}</span>
+                            </td>
+                          );
+                        if (col.tag)
+                          return (
+                            <td key={ci}>
+                              <span className="tag">{String(c)}</span>
+                            </td>
+                          );
+                        return (
+                          <td
+                            key={ci}
+                            className={col.wrap ? "wrap" : undefined}
+                          >
+                            {String(c)}
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          )}
+        </div>
+        <div className="pager">
+          <span>
+            Page {current + 1} of {pageCount}
+          </span>
+          <button disabled={current === 0} onClick={() => setPage(current - 1)}>
+            Previous
+          </button>
+          <button
+            disabled={current >= pageCount - 1}
+            onClick={() => setPage(current + 1)}
+          >
+            Next
+          </button>
+        </div>
+      </section>
+    </>
   );
 }

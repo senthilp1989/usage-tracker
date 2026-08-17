@@ -1299,6 +1299,57 @@ header.app {
   overflow-x: auto;
 }
 
+/* ── detail drawer, expanded ────────────────────────────── */
+.detail-card {
+  overflow: hidden;
+}
+
+.detail-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 110;
+  background: rgba(23, 40, 60, 0.42);
+}
+
+:root[data-theme="dark"] .detail-backdrop {
+  background: rgba(0, 0, 0, 0.62);
+}
+
+/* Takes over the viewport so long identifiers and wide tables get real room.
+   The tab strip, tools and pager stay pinned; only the table body scrolls,
+   which keeps the sticky header and the pager reachable at any row count. */
+.detail-card.is-expanded {
+  position: fixed;
+  inset: 16px;
+  z-index: 120;
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  border-radius: 14px;
+}
+
+.detail-card.is-expanded > .tabs,
+.detail-card.is-expanded > .tbl-tools,
+.detail-card.is-expanded > .pager {
+  flex: none;
+}
+
+.detail-card.is-expanded > .tbl-scroll {
+  flex: 1;
+  overflow: auto;
+  min-height: 0;
+}
+
+.detail-card.is-expanded:focus-visible {
+  outline: none;
+}
+
+@media (max-width: 640px) {
+  .detail-card.is-expanded {
+    inset: 8px;
+  }
+}
+
 table.data {
   width: 100%;
   border-collapse: collapse;
