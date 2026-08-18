@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { fmt, fullDate, niceStep, shortDate } from "../format";
+import { addDays, fmt, fullDate, monthLabel, niceStep, shortDate } from "../format";
 import {
   METRICS,
   tupleTotal,
@@ -11,39 +11,108 @@ import type { TipState } from "./Tip";
 const HEIGHT = 300;
 const M = { top: 14, right: 16, bottom: 34, left: 44 };
 const MAX_BAR_WIDTH = 24;
+const MONTHLY_BAR_WIDTH = 56;
 const SEGMENT_GAP = 2; // surface-coloured gap between stacked segments
 const DAILY_LABEL_LIMIT = 32; // above this, per-column totals become noise
 
-type Granularity = "day" | "week";
+/** The first three follow the page's date filter. `sixMonths` is the odd one
+ *  out: it buckets by calendar month like `month`, but over its own fixed
+ *  6-month window, because the page filter is capped at 90 days and clips the
+ *  end months off any monthly view. */
+type Granularity = "day" | "week" | "month" | "sixMonths";
+
+/** What one column represents - `sixMonths` still plots months. */
+const UNIT: Record<Granularity, string> = {
+  day: "day",
+  week: "week",
+  month: "month",
+  sixMonths: "month",
+};
+
+const byCalendarMonth = (g: Granularity) => g === "month" || g === "sixMonths";
 
 interface Bucket {
   key: string;
   label: string;
   rangeLabel: string;
   values: MetricTuple;
+  /** Covers fewer days than its unit implies - a week cut short by the range
+   *  end, or a month clipped by either edge of it. Such a column is shorter
+   *  for a reason that has nothing to do with activity, so it must not be
+   *  compared with its neighbours without a warning. */
+  partial: boolean;
 }
 
 function bucketSeries(data: DailyStats[], granularity: Granularity): Bucket[] {
-  const make = (chunk: DailyStats[]): Bucket => {
-    const values = METRICS.map((m) =>
-      chunk.reduce((sum, d) => sum + d[m.key], 0),
+  const sum = (chunk: DailyStats[]) =>
+    METRICS.map((m) =>
+      chunk.reduce((total, d) => total + d[m.key], 0),
     ) as unknown as MetricTuple;
+
+  // A day is never partial: today's column is still filling up, but every
+  // other daily column is a whole day, and flagging one bar on every daily
+  // view would cost more attention than it earns.
+  if (granularity === "day")
+    return data.map((d) => ({
+      key: d.day,
+      label: shortDate(d.day),
+      rangeLabel: fullDate(d.day),
+      values: sum([d]),
+      partial: false,
+    }));
+
+  if (byCalendarMonth(granularity)) {
+    // Calendar months, not fixed 30-day chunks: a column labelled "Aug 2026"
+    // has to actually mean August, or it can't be compared with a month from
+    // any other date range. Weekly below is deliberately the opposite - fixed
+    // 7-day chunks anchored to the range start, not ISO calendar weeks.
+    const byMonth = new Map<string, DailyStats[]>();
+    for (const d of data) {
+      const chunk = byMonth.get(d.day.slice(0, 7));
+      if (chunk) chunk.push(d);
+      else byMonth.set(d.day.slice(0, 7), [d]);
+    }
+    return [...byMonth.values()].map((chunk) => {
+      const start = chunk[0].day;
+      const end = chunk[chunk.length - 1].day;
+      // A range starting or ending mid-month yields a short column. Say so in
+      // the tooltip, otherwise a stub bar reads as a collapse in activity.
+      const partial =
+        Number(start.slice(8)) !== 1 ||
+        addDays(end, 1).slice(0, 7) === end.slice(0, 7);
+      return {
+        key: start,
+        label: monthLabel(start),
+        rangeLabel: partial
+          ? `${monthLabel(start)} · ${shortDate(start)} – ${shortDate(end)} only`
+          : monthLabel(start),
+        values: sum(chunk),
+        partial,
+      };
+    });
+  }
+
+  const buckets: Bucket[] = [];
+  for (let i = 0; i < data.length; i += 7) {
+    const chunk = data.slice(i, i + 7);
     const start = chunk[0].day;
     const end = chunk[chunk.length - 1].day;
-    return {
+    // Chunks run from the range start, so only the final one can come up
+    // short - when the range length isn't a multiple of 7.
+    const partial = chunk.length < 7;
+    buckets.push({
       key: start,
       label: shortDate(start),
       rangeLabel:
         chunk.length > 1
-          ? `Week of ${shortDate(start)} – ${shortDate(end)}`
-          : fullDate(start),
-      values,
-    };
-  };
-  if (granularity === "day") return data.map((d) => make([d]));
-  const buckets: Bucket[] = [];
-  for (let i = 0; i < data.length; i += 7)
-    buckets.push(make(data.slice(i, i + 7)));
+          ? `Week of ${shortDate(start)} – ${shortDate(end)}${
+              partial ? ` · ${chunk.length} days only` : ""
+            }`
+          : `${fullDate(start)} · 1 day only`,
+      values: sum(chunk),
+      partial,
+    });
+  }
   return buckets;
 }
 
@@ -52,18 +121,42 @@ export default function ActivityChart({
   series,
   onToggleSeries,
   onTip,
+  wideMonths,
+  wideData,
+  wideLoading,
+  wideError,
+  onWideNeeded,
 }: {
   data: DailyStats[];
   series: boolean[];
   onToggleSeries: (index: number) => void;
   onTip: (tip: TipState | null) => void;
+  /** How many calendar months the override covers, for labels. */
+  wideMonths: number;
+  /** The override series, zero-filled; null until it has been fetched. */
+  wideData: DailyStats[] | null;
+  wideLoading: boolean;
+  wideError: boolean;
+  /** Told whether the override series is currently wanted, so the parent only
+   *  fetches it while it is actually on screen. Must be referentially stable. */
+  onWideNeeded: (needed: boolean) => void;
 }) {
   const [view, setView] = useState<"chart" | "table">("chart");
   const [granularity, setGranularity] = useState<Granularity>("week");
+  // "6 months" is its own mode, not a modifier on Monthly: picking it swaps in
+  // a separately fetched 6-month series. Every other mode reads the page
+  // filter. The user/environment filters apply to both - only the period is
+  // overridden.
+  const wideActive = granularity === "sixMonths";
 
+  useEffect(() => {
+    onWideNeeded(wideActive);
+  }, [wideActive, onWideNeeded]);
+
+  const source = wideActive && wideData ? wideData : data;
   const buckets = useMemo(
-    () => bucketSeries(data, granularity),
-    [data, granularity],
+    () => bucketSeries(source, granularity),
+    [source, granularity],
   );
   const totals = useMemo(
     () => buckets.map((b) => tupleTotal(b.values, series)),
@@ -76,8 +169,14 @@ export default function ActivityChart({
         <div>
           <h2>Volume by period</h2>
           <p className="sub">
-            {buckets.length} {granularity === "day" ? "days" : "weeks"} ·
-            stacked by metric
+            {buckets.length} {UNIT[granularity]}
+            {buckets.length === 1 ? "" : "s"} · stacked by metric
+            {wideActive &&
+              (wideError
+                ? ` · ${wideMonths}-month data unavailable, showing the page filter`
+                : wideLoading && !wideData
+                  ? ` · loading ${wideMonths} months…`
+                  : ` · ${wideMonths} calendar months ending ${buckets[buckets.length - 1]?.label ?? ""}, overriding the date filter`)}
           </p>
         </div>
         <div style={{ display: "flex", gap: 8 }}>
@@ -93,6 +192,19 @@ export default function ActivityChart({
               onClick={() => setGranularity("week")}
             >
               Weekly
+            </button>
+            <button
+              aria-pressed={granularity === "month"}
+              onClick={() => setGranularity("month")}
+            >
+              Monthly
+            </button>
+            <button
+              aria-pressed={granularity === "sixMonths"}
+              onClick={() => setGranularity("sixMonths")}
+              title={`${wideMonths} whole calendar months, ignoring the page date filter`}
+            >
+              {wideMonths} months
             </button>
           </div>
           <div className="seg" role="group" aria-label="View">
@@ -124,6 +236,13 @@ export default function ActivityChart({
           />
         ) : (
           <BucketTable buckets={buckets} totals={totals} />
+        )}
+        {buckets.some((b) => b.partial) && (
+          <p className="sub" style={{ marginTop: 10 }}>
+            * incomplete {UNIT[granularity]} — fewer days fall inside the
+            selected period, so the column is short by the calendar, not by
+            activity. Hover for its exact span.
+          </p>
         )}
         <div className="legend">
           {METRICS.map((m, i) => {
@@ -193,8 +312,10 @@ function Plot({
   const max = Math.max(1, ...totals);
   const step = niceStep(max);
   const top = Math.ceil(max / step) * step;
+  // Monthly puts only a handful of columns on a full-width plot, where the
+  // usual 24px cap reads as stray sticks rather than bars - let them breathe.
   const barWidth = Math.min(
-    MAX_BAR_WIDTH,
+    byCalendarMonth(granularity) ? MONTHLY_BAR_WIDTH : MAX_BAR_WIDTH,
     Math.max(3, (plotW / buckets.length) * 0.72),
   );
   const xCenter = (i: number) => M.left + plotW * ((i + 0.5) / buckets.length);
@@ -204,7 +325,7 @@ function Plot({
   for (let v = 0; v <= top + 1e-9; v += step) ticks.push(v);
 
   const showTotals =
-    granularity === "week" || buckets.length <= DAILY_LABEL_LIMIT;
+    granularity !== "day" || buckets.length <= DAILY_LABEL_LIMIT;
 
   // A long leading run of empty buckets is a finding, not dead space: block it
   // out and say when recording actually starts.
@@ -233,8 +354,33 @@ function Plot({
         className="plot"
         viewBox={`0 0 ${W} ${HEIGHT}`}
         role="img"
-        aria-label={`Stacked activity volume by ${granularity === "day" ? "day" : "week"}`}
+        aria-label={`Stacked activity volume by ${UNIT[granularity]}`}
       >
+        {/* Partial columns are overlaid with this rather than dimmed: the
+            metric colours are already at the edge of their contrast budget
+            (slot 1 is 2.82:1), so lowering their opacity would trade one
+            accessibility problem for another. The hatch sits on top and
+            leaves the fill untouched. */}
+        <defs>
+          <pattern
+            id="partial-hatch"
+            width={6}
+            height={6}
+            patternUnits="userSpaceOnUse"
+            patternTransform="rotate(45)"
+          >
+            <rect width={6} height={6} fill="var(--surface)" opacity={0.34} />
+            <line
+              x1={0}
+              y1={0}
+              x2={0}
+              y2={6}
+              stroke="var(--surface)"
+              strokeWidth={3}
+              opacity={0.75}
+            />
+          </pattern>
+        </defs>
         {leadingBlock > 0 && (
           <>
             <rect
@@ -307,6 +453,17 @@ function Plot({
               className={`colgroup${hover !== null && hover !== i ? " dim" : ""}`}
             >
               {segments}
+              {b.partial && totals[i] > 0 && (
+                <rect
+                  x={xCenter(i) - barWidth / 2}
+                  width={barWidth}
+                  y={y(totals[i])}
+                  height={Math.max(0, y(0) - y(totals[i]))}
+                  fill="url(#partial-hatch)"
+                  rx={Math.min(4, barWidth / 2)}
+                  pointerEvents="none"
+                />
+              )}
               {showTotals && totals[i] > 0 && (
                 <text
                   x={xCenter(i)}
@@ -359,6 +516,7 @@ function Plot({
               className="tick"
             >
               {buckets[i].label}
+              {buckets[i].partial ? "*" : ""}
             </text>
           );
         })}
@@ -398,7 +556,10 @@ function BucketTable({
         <tbody>
           {rows.map(({ b, total }) => (
             <tr key={b.key}>
-              <td>{b.rangeLabel}</td>
+              <td>
+                {b.rangeLabel}
+                {b.partial ? " *" : ""}
+              </td>
               {METRICS.map((m, i) => (
                 <td className={`n${b.values[i] ? "" : " zero"}`} key={m.key}>
                   {fmt(b.values[i])}

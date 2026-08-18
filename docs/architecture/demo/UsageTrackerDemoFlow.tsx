@@ -43,8 +43,8 @@ const NODES = {
     USER: { id: "USER", x: 40, y: 130, icon: "👤", title: "User / Browser", sub: "React SPA · dashboard admin", color: "#8b5cf6", desc: "The dashboard admin's browser running the React 18 SPA (Vite build). It keeps the 12h session token in localStorage and renders the KPI tiles, the hand-rolled SVG trend chart, and the per-user table." },
   NGINX: { id: "NGINX", x: 340, y: 130, icon: "🌐", title: "nginx", sub: "SPA host + /api proxy", color: "#10b981", desc: "Web server inside the frontend container: serves the built SPA with an index.html fallback and reverse-proxies /api/* to the API container, stripping the /api prefix on the way through." },
   API: { id: "API", x: 640, y: 130, icon: "⚡", title: "FastAPI api", sub: "Uvicorn · SQLAlchemy", color: "#3b82f6", desc: "FastAPI service (Uvicorn, SQLAlchemy 2, Pydantic v2) that owns both auth schemes — shared X-API-Key for ingestion, HMAC-signed 12h session tokens for dashboard reads — and aggregates all stats at query time." },
-  DB: { id: "DB", x: 940, y: 130, icon: "🐘", title: "PostgreSQL", sub: "usage_reports · 1 row/user/day", color: "#f59e0b", desc: "PostgreSQL 15, reachable only on the internal Docker network. A single usage_reports table holds one upserted row per user per day; schema comes from create_all at startup — no migrations." },
-  TESTEASE: { id: "TESTEASE", x: 640, y: 350, icon: "🧪", title: "Test Ease", sub: "usage reporter (external)", color: "#64748b", external: true, desc: "The external product being measured — the sole ingestion client. On a fixed interval it POSTs each user's running daily totals to /reports; it never sends one event per action." },
+  DB: { id: "DB", x: 940, y: 130, icon: "🐘", title: "PostgreSQL", sub: "4 event tables · 1 row/action", color: "#f59e0b", desc: "PostgreSQL 15, reachable only on the internal Docker network. Four append-only event tables hold one row per action, deduped on each event type’s natural key; the schema is managed by Alembic, applied on API startup." },
+  TESTEASE: { id: "TESTEASE", x: 640, y: 350, icon: "🧪", title: "Test Ease", sub: "usage reporter (external)", color: "#64748b", external: true, desc: "The external product being measured — the sole ingestion client. On a fixed interval it POSTs the raw events since its own checkpoint to /events — one row per action, never a running total." },
 };
 
 const center = (n) => ({ x: NODES[n].x + NW / 2, y: NODES[n].y + NH / 2 });
@@ -79,9 +79,9 @@ const center = (n) => ({ x: NODES[n].x + NW / 2, y: NODES[n].y + NH / 2 });
 // or the return-arrow won't render.
 const STEPS = [
   // Phase 0 — Test Ease ingestion
-  { f: "TESTEASE", t: "API", ph: 0, k: "call", route: "Test Ease → API", m: "POST /reports with X-API-Key — running daily totals for jane@…", chat: [["TESTEASE", "Interval tick — here are jane's running totals for today."], ["API", "X-API-Key matches. Payload validates (Pydantic)."]] },
-  { f: "DB", t: "API", ph: 0, k: "call", roundTrip: true, route: "API ⇄ PostgreSQL", m: "SELECT the (user_email, report_date) row this report upserts into", chat: [["API", "Any row for (jane, today)?"], ["DB", "Yes — last written at 09:00 this morning."]] },
-  { f: "API", t: "DB", ph: 0, k: "call", route: "API → PostgreSQL", m: "UPDATE — the new running totals replace the old row (upsert); reported_at bumped", chat: [["API", "Overwrite with the new totals; bump reported_at."]] },
+  { f: "TESTEASE", t: "API", ph: 0, k: "call", route: "Test Ease → API", m: "POST /events with X-API-Key — the raw events since jane’s last checkpoint", chat: [["TESTEASE", "Interval tick — here are the actions since my checkpoint."], ["API", "X-API-Key matches. Validating row by row (Pydantic)."]] },
+  { f: "API", t: "API", ph: 0, k: "work", route: "FastAPI api", m: "Validate each row on its own — a bad row goes to rejected[], the rest still insert", chat: [["API", "One malformed email in the batch. Drop that row, keep the other 46."]] },
+  { f: "API", t: "DB", ph: 0, k: "call", route: "API → PostgreSQL", m: "Bulk INSERT per event type — ON CONFLICT DO NOTHING absorbs any resend", chat: [["API", "Append them; silently skip anything already stored."]] },
   { f: "API", t: "TESTEASE", ph: 0, k: "data", route: "API → Test Ease", m: "200 OK — the stored row is echoed back", chat: [["API", "Stored. See you next interval."]] },
   // Phase 1 — open the dashboard
   { f: "USER", t: "NGINX", ph: 1, k: "call", route: "Browser → nginx", m: "GET / — the admin opens the dashboard at :3005", chat: [["USER", "Let's check this week's usage."]] },
@@ -97,17 +97,17 @@ const STEPS = [
   { f: "USER", t: "NGINX", ph: 3, k: "call", route: "Browser → nginx", m: "GET /api/dashboard/summary?from&to with Authorization: Bearer", chat: [["USER", "Last 7 days, please."]] },
   { f: "NGINX", t: "API", ph: 3, k: "call", route: "nginx → API", m: "Forwarded as /dashboard/summary (prefix stripped)" },
   { f: "API", t: "API", ph: 3, k: "work", route: "API", m: "verify_dashboard_token: recompute the HMAC, check expiry", chat: [["API", "Signature valid, not expired. Proceed."]] },
-  { f: "DB", t: "API", ph: 3, k: "call", roundTrip: true, route: "API ⇄ PostgreSQL", m: "SUM the three metrics + COUNT DISTINCT users over the date range", chat: [["API", "Aggregate usage_reports over the 7-day window."], ["DB", "3 users · 41 created · 87 executed · 12 docs."]] },
-  { f: "DB", t: "API", ph: 3, k: "call", roundTrip: true, route: "API ⇄ PostgreSQL", m: "GROUP BY report_date for the daily trend, plus per-user totals", chat: [["API", "Now the per-day and per-user breakdowns."], ["DB", "7 day-rows and 3 user-rows coming up."]] },
+  { f: "DB", t: "API", ph: 3, k: "call", roundTrip: true, route: "API ⇄ PostgreSQL", m: "COUNT rows per event table + COUNT DISTINCT users over the date range", chat: [["API", "Count each event table over the 7-day window."], ["DB", "3 users · 41 created · 87 executed · 12 docs."]] },
+  { f: "DB", t: "API", ph: 3, k: "call", roundTrip: true, route: "API ⇄ PostgreSQL", m: "GROUP BY day for the activity chart, plus the per-user rollups", chat: [["API", "Now the per-day and per-user breakdowns."], ["DB", "7 day-rows and 3 user-rows coming up."]] },
   { f: "API", t: "NGINX", ph: 3, k: "data", route: "API → nginx", m: "Pydantic-shaped JSON: StatsSummary, DailyStats[], UserStats[]" },
   { f: "NGINX", t: "USER", ph: 3, k: "data", route: "nginx → Browser", m: "JSON lands in the SPA's fetch calls", chat: [["USER", "Data's in — render it."]] },
   // Phase 4 — render
-  { f: "USER", t: "USER", ph: 4, k: "work", route: "Browser", m: "React renders the KPI StatTiles, the hand-rolled SVG DailyTrend chart, and the users table", chat: [["USER", "📊 Totals, trend line, per-user table — all live."]] },
+  { f: "USER", t: "USER", ph: 4, k: "work", route: "Browser", m: "React renders the KPI tiles, the hand-rolled SVG activity chart, and the leaderboards", chat: [["USER", "📊 Totals, trend line, per-user table — all live."]] },
 ];
 
 // One label per phase index used in STEPS. Shown in the toolbar's phase tag.
 const PHASES = [
-  "Ingest — Test Ease reports totals",
+  "Ingest — Test Ease reports raw events",
   "Load — open the dashboard",
   "Login — mint a session token",
   "Query — aggregate the stats",
@@ -166,14 +166,14 @@ const BIDIRECTIONAL = new Set(["API|DB"]);
 const DB_INGEST_FROM = "API"; // node id, e.g. 'API', or null
 const DB_INGEST_TO = "DB"; // node id, e.g. 'DB', or null
 const DB_INGEST_ICON = "⚡ ➔ 🐘"; // e.g. '🖥️ ➔ 🗄️'
-const DB_INGEST_TITLE = "Upserting usage_reports…"; // e.g. 'Saving run to PostgreSQL...'
+const DB_INGEST_TITLE = "Inserting raw events…"; // e.g. 'Saving run to PostgreSQL...'
 const DB_INGEST_FILES = [
-  { name: "test_cases_created = 14", size: "int" },
-  { name: "test_cases_executed = 29", size: "int" },
-  { name: "documents_generated = 4", size: "int" },
-  { name: "stack_id = stack-eu-1", size: "text" },
-  { name: "reported_at = now()", size: "tstz" },
-  { name: "uq (user_email, report_date)", size: "ok" },
+  { name: "test_cases_created[] = 14 rows", size: "json" },
+  { name: "test_cases_executed[] = 29 rows", size: "json" },
+  { name: "documents_generated[] = 4 rows", size: "json" },
+  { name: "interface_name = OrderSync", size: "text" },
+  { name: "created_at = IST, naive", size: "ts" },
+  { name: "on conflict do nothing", size: "ok" },
 ]; // [{name,size}, ...] cosmetic file list
 // Place the console in genuinely empty canvas space near DB_INGEST_TO — check
 // your NODES layout for a gap, don't just guess.
@@ -189,7 +189,7 @@ const DB_INGEST_PARTICLE_PATH = {
 };
 
 const TITLE = "TestEase Usage Tracker — Live Request Flow";
-const SUBTITLE = "Test Ease reports running daily totals; an admin logs in and reads the aggregates";
+const SUBTITLE = "Test Ease reports raw per-action events; an admin logs in and reads the aggregates";
 
 // ============================================================================
 // ArchFlow ENGINE — do not modify below this line.
@@ -1267,7 +1267,7 @@ export function UsageTrackerDemoFlow() {
             external system
           </span>
         </div>
-        <p style={{ margin: 0 }}>Everything hangs off one table: <b>Test Ease</b> POSTs each user's <b>running daily totals</b> (not per-action events) to <b>POST /reports</b> with a shared <b>X-API-Key</b>, and each report <b>upserts</b> one row per user per day in <b>usage_reports</b>. The dashboard never touches Postgres directly — it logs in for an <b>HMAC-signed 12h token</b> and reads the aggregates through the same FastAPI service, with nginx proxying <b>/api/*</b> in between.</p>
+        <p style={{ margin: 0 }}>Nothing is pre-aggregated: <b>Test Ease</b> POSTs <b>raw per-action events</b> (not daily totals) to <b>POST /events</b> with a shared <b>X-API-Key</b>, batched since its own checkpoint, and each row is a plain <b>append-only INSERT</b> into one of four event tables — every total you see is derived at query time. The dashboard never touches Postgres directly — it logs in for an <b>HMAC-signed 12h token</b> and reads the aggregates through the same FastAPI service, with nginx proxying <b>/api/*</b> in between.</p>
       </footer>
     </div>
   );

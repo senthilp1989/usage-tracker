@@ -1,10 +1,7 @@
 from datetime import date, datetime
 from typing import Generic, List, Optional, TypeVar
-from zoneinfo import ZoneInfo
 
-from pydantic import BaseModel, EmailStr, field_serializer, field_validator
-
-IST = ZoneInfo("Asia/Kolkata")
+from pydantic import BaseModel, EmailStr, field_validator
 
 T = TypeVar("T")
 
@@ -12,28 +9,6 @@ T = TypeVar("T")
 class Page(BaseModel, Generic[T]):
     items: List[T]
     total: int
-
-
-class UsageReportIn(BaseModel):
-    user_email: EmailStr
-    environment: str
-    report_date: date
-    test_cases_created: int = 0
-    test_cases_executed: int = 0
-    documents_generated: int = 0
-    test_cases_passed: int = 0
-    test_cases_failed: int = 0
-
-
-class UsageReportOut(UsageReportIn):
-    reported_at: datetime
-
-    class Config:
-        from_attributes = True
-
-    @field_serializer("reported_at")
-    def _reported_at_ist(self, value: datetime) -> datetime:
-        return value.astimezone(IST)
 
 
 class LoginIn(BaseModel):
@@ -62,7 +37,14 @@ def _canonicalize_environment(value: str) -> str:
     # canonical casing per underscore segment on write, matching the
     # prevailing style already in the data. See migration 0007 for the
     # backfill of rows ingested before this existed.
-    return "_".join(part.capitalize() for part in value.split("_"))
+    #
+    # Whitespace is stripped for the same reason, and it's the nastier of the
+    # two: "Heineken_Dev  " renders identically to "Heineken_Dev" in the
+    # filter popover (HTML collapses trailing space), so the split showed up
+    # as one environment listed twice with its activity halved. The source
+    # name is free text that Test Ease does not trim, so strip per segment as
+    # well as at the ends. See migration 0008 for that backfill.
+    return "_".join(part.strip().capitalize() for part in value.strip().split("_"))
 
 
 class TestCaseCreatedEventIn(BaseModel):

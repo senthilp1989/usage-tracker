@@ -1,5 +1,5 @@
 @startuml system-workflow
-title TestEase Usage Tracker — Workflow (Test Ease reports totals; an admin views the dashboard)
+title TestEase Usage Tracker — Workflow (Test Ease reports raw events; an admin views the dashboard)
 
 skinparam backgroundColor #FFFFFF
 skinparam shadowing false
@@ -15,16 +15,15 @@ actor "User" as User
 participant "nginx\n(SPA + /api proxy)" as NGINX #E8F5E9
 participant "FastAPI api\n(ingestion + dashboard)" as API #E3F2FD
 
-database "PostgreSQL\n(usage_reports)" as DB #ECEFF1
+database "PostgreSQL\n(4 raw event tables)" as DB #ECEFF1
 boundary  "Test Ease\n(usage reporter)"  as TE #ECEFF1
 
-== Step 1 — Test Ease reports today's running totals ==
-TE -> API : POST /reports (X-API-Key)\nrunning totals for jane@…
+== Step 1 — Test Ease reports the events since its checkpoint ==
+TE -> API : POST /events (X-API-Key)\nper-action events for jane@…
 activate API
-API -> DB : SELECT row for (user, report_date)
-DB --> API : existing row (or none)
-API -> DB : INSERT / UPDATE — **upsert UsageReport**
-API --> TE : 200 — stored totals echoed
+API -> API : validate **each row**;\nbad rows → `rejected`
+API -> DB : bulk INSERT per event type\n**ON CONFLICT DO NOTHING**
+API --> TE : 200 — accepted counts + rejected[]
 deactivate API
 
 == Step 2 — The admin opens the dashboard ==
@@ -45,18 +44,19 @@ User -> NGINX : GET /api/dashboard/summary?from&to\n(Authorization: Bearer)
 NGINX -> API : /dashboard/summary
 activate API
 API -> API : verify token HMAC + expiry
-API -> DB : SUM metrics, COUNT DISTINCT users,\nGROUP BY report_date
+API -> DB : COUNT per event table,\nCOUNT DISTINCT users, GROUP BY day
 DB --> API : aggregate rows
 API --> NGINX : **StatsSummary / DailyStats** JSON
 deactivate API
 NGINX --> User : 📊 dashboard data
 
 == Step 5 — Render ==
-User -> User : render **KPI tiles + SVG trend chart**
+User -> User : render **KPI tiles + SVG activity chart**
 
 note across
-  Test Ease sends **running daily totals** on an interval — not one event
-  per action — and each report **upserts** one Postgres row per user per day.
+  Test Ease sends **one row per action** on an interval — not daily totals —
+  batched since its own checkpoint, and each row is a plain append-only INSERT.
+  Every total on the dashboard is derived by grouping those rows at query time.
   The dashboard never queries Postgres directly: it reads aggregates through
   the same FastAPI service, behind nginx's /api proxy and an HMAC session token.
 end note

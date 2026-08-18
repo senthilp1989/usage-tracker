@@ -33,13 +33,13 @@ package "API container (:8000)" {
   rectangle "FastAPI api\ningestion + dashboard endpoints" as API
 }
 
-database "PostgreSQL 15\nusage_reports (1 row/user/day)" as DB
+database "PostgreSQL 15\n4 event tables (1 row/action)" as DB
 
 cloud "Test Ease\nusage reporter (external)" as TE
 
 User --> NGINX : HTTP — SPA assets +\n/api/* (Bearer HMAC token, 12h)
 NGINX --> API : proxy_pass,\n/api prefix stripped
-TE --> API : REST POST /reports\n(X-API-Key)
+TE --> API : REST POST /events\n(X-API-Key)
 API --> DB : SQL (SQLAlchemy/psycopg2,\npassword auth, internal network)
 
 note bottom of TE

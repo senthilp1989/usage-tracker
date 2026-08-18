@@ -12,7 +12,7 @@ Test Ease ──POST /events──▶ FastAPI api ──▶ PostgreSQL (test_cas
 ```
 
 - **Backend** — FastAPI + SQLAlchemy. Ingestion is authenticated with a shared `X-API-Key`; dashboard endpoints use a signed session token obtained via username/password login.
-- **Database** — PostgreSQL 15. Three raw event tables — one row per test case creation (+ `test_case_name`), per test case execution (+ `test_case_name`, `status`), and per generated document — each with `user_email`, `environment`, `interface_name`, `created_at`, and a unique constraint on those (plus `test_case_name` where present) as a de-dupe backstop against resends. No aggregation happens on ingestion; the dashboard computes totals, pass/fail counts, and interface breakdowns at query time by grouping these tables. There is deliberately no `package_name` — it's never populated by the source system (only exists via a live SAP API call the source tool doesn't make), so it was dropped rather than kept as an always-"unknown" field. `created_at`/`reported_at` are stored as naive IST (UTC+5:30) timestamps — Test Ease shifts to IST once before sending, so no timezone conversion happens anywhere in this service. There's also a frozen `usage_reports` table from an earlier pre-aggregated design; it's no longer written to or read from, kept only as a historical archive.
+- **Database** — PostgreSQL 15. Four raw event tables — one row per test case creation (+ `test_case_name`), per test case execution (+ `test_case_name`, `status`), per generated document, and per generated test-case document (+ `suite_name`, `test_case_names`, `test_case_count`) — each with `user_email`, `environment`, `interface_name`, `created_at`, and a unique constraint on those (plus `test_case_name` where present) as a de-dupe backstop against resends. No aggregation happens on ingestion; the dashboard computes totals, pass/fail counts, and interface breakdowns at query time by grouping these tables. There is deliberately no `package_name` — it's never populated by the source system (only exists via a live SAP API call the source tool doesn't make), so it was dropped rather than kept as an always-"unknown" field. `created_at`/`reported_at` are stored as naive IST (UTC+5:30) timestamps — Test Ease shifts to IST once before sending, so no timezone conversion happens anywhere in this service. An earlier pre-aggregated design kept a `usage_reports` table (one row per user/environment/day); it was frozen when raw-event ingestion arrived and dropped outright in migration 0009, along with its model and `/reports` routes.
 - **Frontend** — React + TypeScript (Vite), hand-rolled SVG charts, served by nginx which also proxies `/api/*` to the backend. Light and dark mode follow the OS preference.
 
 ## Quick start
@@ -48,7 +48,7 @@ All configuration is via `.env` (see `.env.example`):
 
 ## Ingestion API (called by Test Ease)
 
-Test Ease reports raw, individual event rows on a fixed interval — not aggregated totals, and not per-action in real time (each cycle batches whatever's new since its last checkpoint). Requires the `X-API-Key` header. The body is a single object with three independent lists, any of which may be empty:
+Test Ease reports raw, individual event rows on a fixed interval — not aggregated totals, and not per-action in real time (each cycle batches whatever's new since its last checkpoint). Requires the `X-API-Key` header. The body is a single object with four independent lists, any of which may be empty:
 
 ```bash
 curl -X POST http://localhost:8000/events \
@@ -68,7 +68,6 @@ curl -X POST http://localhost:8000/events \
 - Every row is a plain **insert**, not an upsert — these are immutable, append-only events. A row matching an existing natural key (`user_email, environment, interface_name`, plus `test_case_name` where applicable, plus `created_at`) is silently skipped (`ON CONFLICT DO NOTHING`), which only matters if Test Ease ever resends a window it already sent (e.g. after losing its own checkpoint state).
 - A malformed row (e.g. an invalid email) is rejected individually, not the whole batch — the response's `rejected` array lists which rows and why; everything else still gets inserted.
 - `created_at` must be a naive datetime string (no timezone offset/`Z` suffix) already shifted to IST — see `app/models.py` for why.
-- `GET /reports` still exists and lists the old frozen `usage_reports` archive (requires `X-API-Key`) — nothing writes to it anymore.
 
 ## Dashboard
 
@@ -152,13 +151,12 @@ app/                    FastAPI application
   main.py               App entrypoint, CORS, /health
   config.py             Env-based settings
   database.py           SQLAlchemy engine/session
-  models.py             TestCaseCreatedEvent / TestCaseExecutedEvent / DocumentGeneratedEvent
-                         (raw, one row per event) + frozen UsageReport archive
+  models.py             TestCaseCreatedEvent / TestCaseExecutedEvent / DocumentGeneratedEvent /
+                         TestCaseDocumentGeneratedEvent (raw, one row per event)
   schemas.py            Request/response models
   auth.py               X-API-Key check + dashboard session tokens (HMAC)
   routers/
     events.py           POST /events (insert, ON CONFLICT DO NOTHING) — ingestion
-    reports.py          Frozen: GET /reports (archive read) + POST /reports (unused, kept for the old route)
     dashboard.py         Login + aggregated stats, computed at query time from the raw event tables
 alembic/                Schema migrations (env.py, versions/)
 alembic.ini             Alembic config (DB URL resolved from app settings at runtime)

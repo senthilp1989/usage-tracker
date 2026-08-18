@@ -102,6 +102,9 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  /* Wraps rather than squeezing the title: the activity card now carries five
+     segmented buttons (Daily/Weekly/Monthly + Chart/Table) in this row. */
+  flex-wrap: wrap;
   gap: 16px;
   padding: 18px 20px 0;
 }

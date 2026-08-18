@@ -22,7 +22,13 @@ import Hero from "./components/Hero";
 import KpiTile from "./components/KpiTile";
 import RankedBars, { type RankEntry } from "./components/RankedBars";
 import Tip, { type TipState } from "./components/Tip";
-import { downloadCsv, fullDate, spanDays } from "./format";
+import {
+  downloadCsv,
+  fullDate,
+  monthsBackStart,
+  spanDays,
+  todayIso,
+} from "./format";
 import type { Theme } from "./theme";
 import {
   METRICS,
@@ -37,6 +43,14 @@ import {
 } from "./types";
 
 const TOP_INTERFACES = 8;
+
+/** The activity chart's monthly view can override the page date filter with a
+ *  fixed window of whole calendar months. It exists because the page filter is
+ *  capped at 90 days (FilterBar), which clips the first and last month of any
+ *  monthly view - fine for a trend, useless for comparing months. Scoped to
+ *  that one chart on purpose: widening the whole page would double the
+ *  unpaginated /export payloads every panel below depends on. */
+const CHART_WIDE_MONTHS = 6;
 
 function zeroFill(range: DateRange, rows: DailyStats[]): DailyStats[] {
   const byDay = new Map(rows.map((r) => [r.day, r]));
@@ -158,6 +172,12 @@ export default function Dashboard({
   const [artifacts, setArtifacts] = useState<ArtifactStats[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // Activity chart's monthly override: fetched only while the chart says it
+  // wants it, and kept out of `daily` so no other panel can pick it up.
+  const [wideNeeded, setWideNeeded] = useState(false);
+  const [wideDaily, setWideDaily] = useState<DailyStats[] | null>(null);
+  const [wideLoading, setWideLoading] = useState(false);
+  const [wideError, setWideError] = useState(false);
   // Legend toggles scope every panel below the chart, not just the chart -
   // turning a metric off has to mean the same thing everywhere on the page.
   const [series, setSeries] = useState<boolean[]>([true, true, true, true]);
@@ -224,6 +244,50 @@ export default function Dashboard({
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [range.from, range.to, user.join(","), environment.join(",")]);
+
+  // Whole calendar months ending with the month the page filter ends in, so
+  // the override widens the period the user picked rather than jumping them to
+  // a different one - walking a custom range back through history still works.
+  // Only the period is overridden: the user and environment filters are passed
+  // to the fetch below and still apply.
+  const wideRange = useMemo<DateRange>(
+    () => ({
+      from: monthsBackStart(range.to || todayIso(), CHART_WIDE_MONTHS - 1),
+      to: range.to,
+    }),
+    [range.to],
+  );
+
+  useEffect(() => {
+    if (!wideNeeded || !wideRange.to) {
+      setWideDaily(null);
+      setWideError(false);
+      return;
+    }
+    let cancelled = false;
+    setWideLoading(true);
+    setWideError(false);
+    fetchDaily(wideRange, user, environment)
+      .then((d) => !cancelled && setWideDaily(zeroFill(wideRange, d)))
+      .catch((err) => {
+        if (cancelled) return;
+        if (err instanceof UnauthorizedError) onLogout();
+        // Anything else stays local to the chart: the rest of the page loaded
+        // fine, so the page-level error banner would be a lie.
+        else setWideError(true);
+      })
+      .finally(() => !cancelled && setWideLoading(false));
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    wideNeeded,
+    wideRange.from,
+    wideRange.to,
+    user.join(","),
+    environment.join(","),
+  ]);
 
   const filled = useMemo(() => zeroFill(range, daily), [range, daily]);
   const weekly = useMemo(() => weeklyBuckets(filled).slice(-13), [filled]);
@@ -430,6 +494,11 @@ export default function Dashboard({
             setSeries((s) => s.map((on, k) => (k === i ? !on : on)))
           }
           onTip={setTip}
+          wideMonths={CHART_WIDE_MONTHS}
+          wideData={wideDaily}
+          wideLoading={wideLoading}
+          wideError={wideError}
+          onWideNeeded={setWideNeeded}
         />
 
         <div className="sec-title">

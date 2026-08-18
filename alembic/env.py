@@ -5,7 +5,7 @@ from sqlalchemy import engine_from_config, pool
 
 from app.config import settings
 from app.database import Base
-from app.models import UsageReport  # noqa: F401  (registers metadata)
+from app import models  # noqa: F401  (imported for its side effect: registers every table on Base.metadata)
 
 config = context.config
 config.set_main_option("sqlalchemy.url", settings.database_url)

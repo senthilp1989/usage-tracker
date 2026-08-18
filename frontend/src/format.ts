@@ -27,6 +27,19 @@ export function fullDate(iso: string): string {
   return `${Number(d)} ${MONTHS[Number(m) - 1]} ${y}`;
 }
 
+/** "Aug 2026" - monthly axis ticks and captions. */
+export function monthLabel(iso: string): string {
+  const [y, m] = iso.split("-");
+  return `${MONTHS[Number(m) - 1]} ${y}`;
+}
+
+/** First day of the calendar month `n` months before the one `iso` falls in.
+ *  `n = 0` is the first of `iso`'s own month. */
+export function monthsBackStart(iso: string, n: number): string {
+  const [y, m] = iso.split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1 - n, 1)).toISOString().slice(0, 10);
+}
+
 /** Inclusive day count spanned by a range, e.g. from === to is 1 day. */
 export function spanDays(from: string, to: string): number {
   const a = new Date(`${from}T00:00:00Z`).getTime();
