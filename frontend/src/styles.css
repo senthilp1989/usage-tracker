@@ -1145,6 +1145,87 @@ header.app {
   color: var(--ink);
 }
 
+/* Holds the card's grid cell while it is fixed-position, and keeps it
+   stretching to the row height the way the bare section used to. */
+.heat-slot {
+  display: flex;
+  flex-direction: column;
+}
+
+.heat-slot > .card:not(.is-expanded) {
+  flex: 1;
+}
+
+/* The grid's own scroller. Collapsed it only ever needs the horizontal axis;
+   expanded it becomes the panel's scrolling body on both axes. */
+.heat-scroll {
+  overflow: auto;
+}
+
+/* Same full-viewport treatment as the detail drawer, for the same reason: one
+   column per environment and one row per user outgrows a half-width card. */
+.heat-card.is-expanded {
+  position: fixed;
+  inset: 16px;
+  z-index: 120;
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  border-radius: 14px;
+}
+
+.heat-card.is-expanded > .card-hd {
+  flex: none;
+}
+
+.heat-card.is-expanded > .heat-scroll {
+  flex: 1;
+  min-height: 0;
+}
+
+.heat-card.is-expanded:focus-visible {
+  outline: none;
+}
+
+/* Headers pin once there is enough grid to scroll, so a cell in the middle of
+   a wide matrix still says which user and which environment it belongs to. */
+.heat-card.is-expanded .heat th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--surface);
+}
+
+.heat-card.is-expanded .heat td.rh {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  background: var(--surface);
+}
+
+.heat-card.is-expanded .heat th:first-child {
+  left: 0;
+  z-index: 3;
+}
+
+.heat-card.is-expanded .heat {
+  font-size: 13px;
+}
+
+.heat-card.is-expanded .heat td {
+  padding: 10px 6px;
+}
+
+.heat-card.is-expanded .heat td.cell {
+  min-width: 56px;
+}
+
+@media (max-width: 640px) {
+  .heat-card.is-expanded {
+    inset: 8px;
+  }
+}
+
 /* ── details / tables ───────────────────────────────────── */
 .tabs {
   display: flex;

@@ -20,7 +20,8 @@ import FilterBar, {
   presetRange,
   type Preset,
 } from "./components/FilterBar";
-import Heatmap, { type HeatCell } from "./components/Heatmap";
+import { type HeatCell } from "./components/Heatmap";
+import HeatmapCard from "./components/HeatmapCard";
 import Hero from "./components/Hero";
 import KpiTile from "./components/KpiTile";
 import RankedBars, { type RankEntry } from "./components/RankedBars";
@@ -545,20 +546,7 @@ export default function Dashboard({
           </p>
         </div>
         <div className="two-up">
-          <section className="card">
-            <div className="card-hd">
-              <div>
-                <h2>User × environment</h2>
-                <p className="sub">
-                  Total actions per pair. Empty cells mean no recorded usage in
-                  this period.
-                </p>
-              </div>
-            </div>
-            <div className="card-bd" style={{ overflowX: "auto" }}>
-              <Heatmap cells={heatCells} />
-            </div>
-          </section>
+          <HeatmapCard cells={heatCells} />
           <section className="card">
             <div className="card-hd">
               <div>
