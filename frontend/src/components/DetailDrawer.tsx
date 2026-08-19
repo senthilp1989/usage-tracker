@@ -1,20 +1,19 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  downloadTableCsv,
   fetchCreatedEvents,
-  fetchCreatedEventsExport,
   fetchDocumentEvents,
-  fetchDocumentEventsExport,
   fetchExecutedEvents,
-  fetchExecutedEventsExport,
   fetchTestCaseDocumentEvents,
-  fetchTestCaseDocumentEventsExport,
+  fetchUsers,
+  type TableQuery,
 } from "../api";
 import { downloadCsv, fmt, fullDate } from "../format";
 import {
   METRICS,
   type ArtifactStats,
   type DateRange,
-  type UserStats,
+  type UserRollupStats,
 } from "../types";
 
 const PAGE_SIZE = 10;
@@ -32,70 +31,215 @@ interface Column {
   tag?: boolean;
   /** List-shaped value that should wrap instead of widening the table. */
   wrap?: boolean;
+  /** Backend column name for server-side sorting. A server-mode column
+   *  without one (the JSONB test-case name list) is not sortable. */
+  field?: string;
 }
 
 interface TabDef {
   id: string;
   name: string;
   columns: Column[];
-  /** Undefined while a lazily-loaded tab is still fetching. */
+  /** Undefined while a server-mode tab is still fetching its first page. */
   rows?: Row[];
   count: number;
 }
 
-/** Tabs sourced from the raw event tables. Their full row sets are fetched
- *  only when the tab is first opened for the current scope - the drawer is
- *  where you go to prove a number, not what the page costs on load. */
-const LAZY_TABS = ["created", "executed", "documents", "tc-documents"] as const;
-type LazyTabId = (typeof LAZY_TABS)[number];
+/** Tabs whose rows live server-side. The table fetches one page at a time -
+ *  free-text `q`, sort and pagination all happen in SQL, ANDed on top of the
+ *  page's date/user/environment scope - and the CSV button downloads the full
+ *  filtered-and-sorted set as a server-built file. The two rollup-fed tabs
+ *  (user totals, usage by interface) stay client-side: their row counts are
+ *  bounded by user/interface cardinality and already sit in memory. */
+const SERVER_TABS = [
+  "usage-by-user",
+  "created",
+  "executed",
+  "documents",
+  "tc-documents",
+] as const;
+type ServerTabId = (typeof SERVER_TABS)[number];
+
+const SERVER_CSV_PATHS: Record<ServerTabId, string> = {
+  "usage-by-user": "/dashboard/users/export",
+  created: "/dashboard/created-events/export",
+  executed: "/dashboard/executed-events/export",
+  documents: "/dashboard/document-events/export",
+  "tc-documents": "/dashboard/test-case-document-events/export",
+};
 
 const localTime = (iso: string) =>
   `${fullDate(iso.slice(0, 10))} ${iso.slice(11, 16)}`;
+
+function fetchServerPage(
+  id: ServerTabId,
+  range: DateRange,
+  page: number,
+  pageSize: number,
+  userEmails: string[],
+  environment: string[],
+  tq: TableQuery,
+): Promise<{ rows: Row[]; total: number }> {
+  switch (id) {
+    case "usage-by-user":
+      return fetchUsers(
+        range,
+        page,
+        pageSize,
+        userEmails,
+        environment,
+        undefined,
+        tq,
+      ).then((p) => ({
+        total: p.total,
+        rows: p.items.map((r) => [
+          r.user_email,
+          r.environment,
+          r.report_date,
+          ...METRICS.map((m) => r[m.key]),
+        ]),
+      }));
+    case "created":
+      return fetchCreatedEvents(
+        range,
+        page,
+        pageSize,
+        userEmails,
+        environment,
+        undefined,
+        tq,
+      ).then((p) => ({
+        total: p.total,
+        rows: p.items.map((r) => [
+          r.user_email,
+          r.environment,
+          r.interface_name,
+          r.test_case_name,
+          localTime(r.created_at),
+        ]),
+      }));
+    case "executed":
+      return fetchExecutedEvents(
+        range,
+        page,
+        pageSize,
+        userEmails,
+        environment,
+        undefined,
+        tq,
+      ).then((p) => ({
+        total: p.total,
+        rows: p.items.map((r) => [
+          r.user_email,
+          r.environment,
+          r.interface_name,
+          r.test_case_name,
+          localTime(r.created_at),
+        ]),
+      }));
+    case "documents":
+      return fetchDocumentEvents(
+        range,
+        page,
+        pageSize,
+        userEmails,
+        environment,
+        undefined,
+        tq,
+      ).then((p) => ({
+        total: p.total,
+        rows: p.items.map((r) => [
+          r.user_email,
+          r.environment,
+          r.interface_name,
+          localTime(r.created_at),
+        ]),
+      }));
+    case "tc-documents":
+      return fetchTestCaseDocumentEvents(
+        range,
+        page,
+        pageSize,
+        userEmails,
+        environment,
+        undefined,
+        tq,
+      ).then((p) => ({
+        total: p.total,
+        rows: p.items.map((r) => [
+          r.user_email,
+          r.environment ?? "—",
+          r.interface_name ?? "—",
+          r.suite_name,
+          r.test_case_names.join(", "),
+          r.test_case_count,
+          localTime(r.created_at),
+        ]),
+      }));
+  }
+}
 
 export default function DetailDrawer({
   range,
   userEmails,
   environment,
-  usageRows,
+  userRollup,
   artifactRows,
 }: {
   range: DateRange;
   userEmails: string[];
   environment: string[];
-  usageRows: UserStats[];
+  userRollup: UserRollupStats[];
   artifactRows: ArtifactStats[];
 }) {
   const [tab, setTab] = useState(0);
   const [query, setQuery] = useState("");
+  const [debouncedQ, setDebouncedQ] = useState("");
   const [sort, setSort] = useState<{ col: number; dir: 1 | -1 } | null>(null);
   const [page, setPage] = useState(0);
-  const [counts, setCounts] = useState<Partial<Record<LazyTabId, number>>>({});
-  const [loaded, setLoaded] = useState<Partial<Record<LazyTabId, Row[]>>>({});
+  const [counts, setCounts] = useState<Partial<Record<ServerTabId, number>>>(
+    {},
+  );
+  const [serverRows, setServerRows] = useState<Row[] | undefined>(undefined);
+  const [serverTotal, setServerTotal] = useState(0);
   const [loading, setLoading] = useState(false);
+  const [csvBusy, setCsvBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState(false);
   const panelRef = useRef<HTMLElement>(null);
   const expandBtnRef = useRef<HTMLButtonElement>(null);
 
-  // Every cached row set belongs to one filter scope; changing the scope
-  // invalidates all of it rather than letting a stale tab linger.
+  // Every fetched page belongs to one filter scope; changing the scope
+  // invalidates all of it rather than letting a stale table linger.
   const scopeKey = `${range.from}|${range.to}|${userEmails.join(",")}|${environment.join(",")}`;
 
+  // The filter box drives a server request on the heavy tabs, so typing a
+  // word should cost one request, not one per keystroke.
   useEffect(() => {
-    setLoaded({});
+    const timer = setTimeout(() => setDebouncedQ(query.trim()), 300);
+    return () => clearTimeout(timer);
+  }, [query]);
+
+  useEffect(() => {
     setCounts({});
+    setServerRows(undefined);
+    setServerTotal(0);
     setPage(0);
     if (!range.to) return;
     let cancelled = false;
+    // Tab-label counts: the paginated endpoints at page_size=1 return the
+    // scope's total without the rows.
     Promise.all([
+      fetchUsers(range, 1, 1, userEmails, environment),
       fetchCreatedEvents(range, 1, 1, userEmails, environment),
       fetchExecutedEvents(range, 1, 1, userEmails, environment),
       fetchDocumentEvents(range, 1, 1, userEmails, environment),
       fetchTestCaseDocumentEvents(range, 1, 1, userEmails, environment),
     ])
-      .then(([c, e, d, t]) => {
+      .then(([u, c, e, d, t]) => {
         if (cancelled) return;
         setCounts({
+          "usage-by-user": u.total,
           created: c.total,
           executed: e.total,
           documents: d.total,
@@ -110,22 +254,6 @@ export default function DetailDrawer({
   }, [scopeKey]);
 
   const tabs = useMemo<TabDef[]>(() => {
-    const byUser = new Map<
-      string,
-      { values: number[]; days: Set<string>; envs: Set<string> }
-    >();
-    for (const r of usageRows) {
-      const entry = byUser.get(r.user_email) ?? {
-        values: [0, 0, 0, 0],
-        days: new Set(),
-        envs: new Set(),
-      };
-      METRICS.forEach((m, i) => (entry.values[i] += r[m.key]));
-      entry.days.add(r.report_date);
-      entry.envs.add(r.environment);
-      byUser.set(r.user_email, entry);
-    }
-
     const metricCols: Column[] = METRICS.map((m) => ({
       label: m.short,
       numeric: true,
@@ -136,18 +264,17 @@ export default function DetailDrawer({
         id: "usage-by-user",
         name: "Usage by user",
         columns: [
-          { label: "User" },
-          { label: "Environment", tag: true },
-          { label: "Date" },
-          ...metricCols,
+          { label: "User", field: "user_email" },
+          { label: "Environment", tag: true, field: "environment" },
+          { label: "Date", field: "report_date" },
+          ...METRICS.map((m) => ({
+            label: m.short,
+            numeric: true,
+            field: m.key as string,
+          })),
         ],
-        rows: usageRows.map((r) => [
-          r.user_email,
-          r.environment,
-          r.report_date,
-          ...METRICS.map((m) => r[m.key]),
-        ]),
-        count: usageRows.length,
+        rows: serverRows,
+        count: counts["usage-by-user"] ?? 0,
       },
       {
         id: "user-totals",
@@ -159,16 +286,19 @@ export default function DetailDrawer({
           { label: "Active days", numeric: true },
           { label: "Environments", numeric: true },
         ],
-        rows: [...byUser.entries()]
-          .map(([email, e]) => [
-            email,
-            e.values.reduce((a, b) => a + b, 0),
-            ...e.values,
-            e.days.size,
-            e.envs.size,
-          ])
+        rows: userRollup
+          .map((r): Row => {
+            const values = METRICS.map((m) => r[m.key]);
+            return [
+              r.user_email,
+              values.reduce((a, b) => a + b, 0),
+              ...values,
+              r.active_days,
+              r.environments,
+            ];
+          })
           .sort((a, b) => (b[1] as number) - (a[1] as number)),
-        count: byUser.size,
+        count: userRollup.length,
       },
       {
         id: "usage-by-interface",
@@ -195,136 +325,94 @@ export default function DetailDrawer({
         id: "created",
         name: "Test cases created",
         columns: [
-          { label: "User" },
-          { label: "Environment", tag: true },
-          { label: "Interface", mono: true },
-          { label: "Test case" },
-          { label: "Created at" },
+          { label: "User", field: "user_email" },
+          { label: "Environment", tag: true, field: "environment" },
+          { label: "Interface", mono: true, field: "interface_name" },
+          { label: "Test case", field: "test_case_name" },
+          { label: "Created at", field: "created_at" },
         ],
-        rows: loaded.created,
+        rows: serverRows,
         count: counts.created ?? 0,
       },
       {
         id: "executed",
         name: "Test cases executed",
         columns: [
-          { label: "User" },
-          { label: "Environment", tag: true },
-          { label: "Interface", mono: true },
-          { label: "Test case" },
-          { label: "Executed at" },
+          { label: "User", field: "user_email" },
+          { label: "Environment", tag: true, field: "environment" },
+          { label: "Interface", mono: true, field: "interface_name" },
+          { label: "Test case", field: "test_case_name" },
+          { label: "Executed at", field: "created_at" },
         ],
-        rows: loaded.executed,
+        rows: serverRows,
         count: counts.executed ?? 0,
       },
       {
         id: "documents",
         name: "TSD documents",
         columns: [
-          { label: "User" },
-          { label: "Environment", tag: true },
-          { label: "Interface", mono: true },
-          { label: "Generated at" },
+          { label: "User", field: "user_email" },
+          { label: "Environment", tag: true, field: "environment" },
+          { label: "Interface", mono: true, field: "interface_name" },
+          { label: "Generated at", field: "created_at" },
         ],
-        rows: loaded.documents,
+        rows: serverRows,
         count: counts.documents ?? 0,
       },
       {
         id: "tc-documents",
         name: "Test-case documents",
         columns: [
-          { label: "User" },
-          { label: "Environment", tag: true },
-          { label: "Interface", mono: true },
-          { label: "Suite" },
+          { label: "User", field: "user_email" },
+          { label: "Environment", tag: true, field: "environment" },
+          { label: "Interface", mono: true, field: "interface_name" },
+          { label: "Suite", field: "suite_name" },
           { label: "Test cases", wrap: true },
-          { label: "Count", numeric: true },
-          { label: "Generated at" },
+          { label: "Count", numeric: true, field: "test_case_count" },
+          { label: "Generated at", field: "created_at" },
         ],
-        rows: loaded["tc-documents"],
+        rows: serverRows,
         count: counts["tc-documents"] ?? 0,
       },
     ];
-  }, [usageRows, artifactRows, loaded, counts]);
+  }, [userRollup, artifactRows, serverRows, counts]);
 
   const active = tabs[Math.min(tab, tabs.length - 1)];
-  const lazyId = LAZY_TABS.includes(active.id as LazyTabId)
-    ? (active.id as LazyTabId)
+  const serverId = SERVER_TABS.includes(active.id as ServerTabId)
+    ? (active.id as ServerTabId)
     : null;
+  const pageSize = expanded ? EXPANDED_PAGE_SIZE : PAGE_SIZE;
+  const sortBy =
+    serverId && sort ? active.columns[sort.col]?.field : undefined;
+  const sortDir: "asc" | "desc" = sort?.dir === 1 ? "asc" : "desc";
 
   useEffect(() => {
-    if (!lazyId || loaded[lazyId] || !range.to) return;
+    if (!serverId || !range.to) return;
     let cancelled = false;
     setLoading(true);
     setError(null);
-    const load = (): Promise<Row[]> => {
-      switch (lazyId) {
-        case "created":
-          return fetchCreatedEventsExport(range, userEmails, environment).then(
-            (rows) =>
-              rows.map((r) => [
-                r.user_email,
-                r.environment,
-                r.interface_name,
-                r.test_case_name,
-                localTime(r.created_at),
-              ]),
-          );
-        case "executed":
-          return fetchExecutedEventsExport(range, userEmails, environment).then(
-            (rows) =>
-              rows.map((r) => [
-                r.user_email,
-                r.environment,
-                r.interface_name,
-                r.test_case_name,
-                localTime(r.created_at),
-              ]),
-          );
-        case "documents":
-          return fetchDocumentEventsExport(range, userEmails, environment).then(
-            (rows) =>
-              rows.map((r) => [
-                r.user_email,
-                r.environment,
-                r.interface_name,
-                localTime(r.created_at),
-              ]),
-          );
-        case "tc-documents":
-          return fetchTestCaseDocumentEventsExport(
-            range,
-            userEmails,
-            environment,
-          ).then((rows) =>
-            rows.map((r) => [
-              r.user_email,
-              r.environment ?? "—",
-              r.interface_name ?? "—",
-              r.suite_name,
-              r.test_case_names.join(", "),
-              r.test_case_count,
-              localTime(r.created_at),
-            ]),
-          );
-      }
-    };
-    load()
-      .then(
-        (rows) =>
-          !cancelled && setLoaded((prev) => ({ ...prev, [lazyId]: rows })),
-      )
+    fetchServerPage(serverId, range, page + 1, pageSize, userEmails, environment, {
+      q: debouncedQ || undefined,
+      sortBy: sortBy || undefined,
+      sortDir,
+    })
+      .then((res) => {
+        if (cancelled) return;
+        setServerRows(res.rows);
+        setServerTotal(res.total);
+      })
       .catch(() => !cancelled && setError("Could not load these records."))
       .finally(() => !cancelled && setLoading(false));
     return () => {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [lazyId, scopeKey, loaded[lazyId ?? "created"]]);
+  }, [serverId, scopeKey, debouncedQ, sortBy, sortDir, page, pageSize]);
 
-  // Filter first, then sort - so the CSV below exports exactly what is on
-  // screen across all pages, not just the visible ten rows.
+  // Client tabs filter and sort here; server tabs arrive already filtered,
+  // sorted and paged, so their rows pass straight through.
   const view = useMemo(() => {
+    if (serverId) return serverRows ?? [];
     let rows = active.rows ?? [];
     const q = query.trim().toLowerCase();
     if (q)
@@ -342,12 +430,14 @@ export default function DetailDrawer({
       });
     }
     return rows;
-  }, [active, query, sort]);
+  }, [active, query, sort, serverId, serverRows]);
 
-  const pageSize = expanded ? EXPANDED_PAGE_SIZE : PAGE_SIZE;
-  const pageCount = Math.max(1, Math.ceil(view.length / pageSize));
+  const filteredTotal = serverId ? serverTotal : view.length;
+  const pageCount = Math.max(1, Math.ceil(filteredTotal / pageSize));
   const current = Math.min(page, pageCount - 1);
-  const visible = view.slice(current * pageSize, (current + 1) * pageSize);
+  const visible = serverId
+    ? (serverRows ?? [])
+    : view.slice(current * pageSize, (current + 1) * pageSize);
 
   function toggleExpand() {
     const next = !expanded;
@@ -383,7 +473,33 @@ export default function DetailDrawer({
     setTab(i);
     setPage(0);
     setQuery("");
+    setDebouncedQ("");
     setSort(null);
+    setServerRows(undefined);
+    setServerTotal(0);
+    setError(null);
+  }
+
+  function downloadActiveCsv() {
+    if (serverId) {
+      setCsvBusy(true);
+      downloadTableCsv(
+        SERVER_CSV_PATHS[serverId],
+        `testease-${active.id}.csv`,
+        range,
+        userEmails,
+        environment,
+        { q: debouncedQ || undefined, sortBy: sortBy || undefined, sortDir },
+      )
+        .catch(() => setError("Could not download the CSV."))
+        .finally(() => setCsvBusy(false));
+    } else {
+      downloadCsv(
+        `testease-${active.id}.csv`,
+        active.columns.map((c) => c.label),
+        view,
+      );
+    }
   }
 
   return (
@@ -437,18 +553,12 @@ export default function DetailDrawer({
           </div>
           <div style={{ flex: 1 }} />
           <span style={{ fontSize: 12.5, color: "var(--muted)" }}>
-            {fmt(view.length)} record{view.length === 1 ? "" : "s"}
+            {fmt(filteredTotal)} record{filteredTotal === 1 ? "" : "s"}
           </span>
           <button
             className="btn"
-            disabled={view.length === 0}
-            onClick={() =>
-              downloadCsv(
-                `testease-${active.id}.csv`,
-                active.columns.map((c) => c.label),
-                view,
-              )
-            }
+            disabled={csvBusy || filteredTotal === 0}
+            onClick={downloadActiveCsv}
           >
             <svg
               width="14"
@@ -462,7 +572,7 @@ export default function DetailDrawer({
             >
               <path d="M12 3v12M7 10l5 5 5-5M4 20h16" />
             </svg>
-            Download CSV
+            {csvBusy ? "Preparing…" : "Download CSV"}
           </button>
           <button
             className="btn"
@@ -514,26 +624,31 @@ export default function DetailDrawer({
             <table className="data">
               <thead>
                 <tr>
-                  {active.columns.map((c, i) => (
-                    <th key={c.label} className={c.numeric ? "n" : undefined}>
-                      <button
-                        onClick={() =>
-                          setSort((s) =>
-                            s && s.col === i
-                              ? { col: i, dir: -s.dir as 1 | -1 }
-                              : { col: i, dir: -1 },
-                          )
-                        }
-                      >
-                        {c.label}
-                        {sort?.col === i && (
-                          <span aria-hidden="true">
-                            {sort.dir > 0 ? "↑" : "↓"}
-                          </span>
-                        )}
-                      </button>
-                    </th>
-                  ))}
+                  {active.columns.map((c, i) => {
+                    const sortable = serverId ? !!c.field : true;
+                    return (
+                      <th key={c.label} className={c.numeric ? "n" : undefined}>
+                        <button
+                          disabled={!sortable}
+                          onClick={() =>
+                            sortable &&
+                            setSort((s) =>
+                              s && s.col === i
+                                ? { col: i, dir: -s.dir as 1 | -1 }
+                                : { col: i, dir: -1 },
+                            )
+                          }
+                        >
+                          {c.label}
+                          {sort?.col === i && (
+                            <span aria-hidden="true">
+                              {sort.dir > 0 ? "↑" : "↓"}
+                            </span>
+                          )}
+                        </button>
+                      </th>
+                    );
+                  })}
                 </tr>
               </thead>
               <tbody>

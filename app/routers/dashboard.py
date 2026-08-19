@@ -1,9 +1,25 @@
+import csv
 import hmac
+import io
 from datetime import date, datetime, time, timedelta, timezone
-from typing import List, Optional, Tuple
+from typing import Callable, List, Optional, Sequence, Tuple
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import BigInteger, func, literal, select, union, union_all
+from fastapi.responses import StreamingResponse
+from sqlalchemy import (
+    BigInteger,
+    String,
+    cast,
+    func,
+    literal,
+    nulls_last,
+    or_,
+    select,
+    text,
+    union,
+    union_all,
+)
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Session
 
 from ..auth import create_dashboard_token, verify_dashboard_token
@@ -20,6 +36,7 @@ from ..schemas import (
     CreatedEventDetail,
     DailyStats,
     DocumentEventDetail,
+    EnvironmentRollupStats,
     ExecutedEventDetail,
     LoginIn,
     LoginOut,
@@ -27,6 +44,7 @@ from ..schemas import (
     StatsSummary,
     TestCaseDocumentEventDetail,
     UserEnvironmentStats,
+    UserRollupStats,
     UserStats,
 )
 
@@ -120,6 +138,7 @@ def summary(
     ).scalar() or 0
 
     users_reporting = _distinct_user_count(db, date_from, date_to, user_email, environment, search)
+    active_days, environments_active = _activity_span(db, date_from, date_to, user_email, environment, search)
 
     return StatsSummary(
         users_reporting=users_reporting,
@@ -127,7 +146,30 @@ def summary(
         test_cases_executed=executed_count,
         documents_generated=documents_count,
         test_case_documents_generated=test_case_documents_count,
+        active_days=active_days,
+        environments_active=environments_active,
     )
+
+
+def _activity_span(
+    db: Session,
+    date_from: date,
+    date_to: date,
+    user_email: Optional[List[str]],
+    environment: Optional[List[str]],
+    search: Optional[str] = None,
+) -> Tuple[int, int]:
+    """Distinct active days and distinct environments in scope, from the same
+    combined (user, environment, day) subquery the /users endpoints use - the
+    frontend used to derive both from the flat /users/export rows."""
+    _, combined = _users_grouped_query(date_from, date_to, user_email, environment, search)
+    row = db.execute(
+        select(
+            func.count(func.distinct(combined.c.report_date)),
+            func.count(func.distinct(combined.c.environment)),
+        )
+    ).one()
+    return row[0] or 0, row[1] or 0
 
 
 def _distinct_user_count(
@@ -302,6 +344,41 @@ def _users_grouped_query(
     return query, combined
 
 
+# Free-text `q` on /users matches the flat table's two text columns; sorting
+# is by any output column name (whitelist below - validated before it reaches
+# the text() ORDER BY, which Postgres resolves against the labeled columns).
+
+_USERS_SORT_COLUMNS = (
+    "user_email",
+    "environment",
+    "report_date",
+    "test_cases_created",
+    "test_cases_executed",
+    "documents_generated",
+    "test_case_documents_generated",
+    "last_event_at",
+)
+
+
+def _users_q_predicates(combined, q: Optional[str]):
+    if not q:
+        return []
+    like = f"%{q}%"
+    return [or_(combined.c.user_email.ilike(like), combined.c.environment.ilike(like))]
+
+
+def _users_order(query, sort_by: Optional[str], sort_dir: str):
+    if sort_by is None:
+        return query
+    if sort_by not in _USERS_SORT_COLUMNS:
+        raise HTTPException(status_code=400, detail=f"Cannot sort by {sort_by!r}")
+    direction = "DESC" if sort_dir == "desc" else "ASC"
+    return query.order_by(None).order_by(
+        text(f"{sort_by} {direction} NULLS LAST"),
+        text("user_email ASC, environment ASC, report_date ASC"),
+    )
+
+
 @router.get("/users", response_model=Page[UserStats], dependencies=[Depends(verify_dashboard_token)])
 def users(
     date_from: date = Query(alias="from"),
@@ -311,15 +388,23 @@ def users(
     search: Optional[str] = Query(default=None),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=10, ge=1, le=200),
+    q: Optional[str] = Query(default=None),
+    sort_by: Optional[str] = Query(default=None),
+    sort_dir: str = Query(default="desc", pattern="^(asc|desc)$"),
     db: Session = Depends(get_db),
 ) -> Page[UserStats]:
     query, combined = _users_grouped_query(date_from, date_to, user_email, environment, search)
+    predicates = _users_q_predicates(combined, q)
+    for predicate in predicates:
+        query = query.where(predicate)
+    query = _users_order(query, sort_by, sort_dir)
 
-    key_subquery = (
-        select(combined.c.user_email, combined.c.environment, combined.c.report_date)
-        .group_by(combined.c.user_email, combined.c.environment, combined.c.report_date)
-        .subquery()
-    )
+    key_source = select(combined.c.user_email, combined.c.environment, combined.c.report_date)
+    for predicate in predicates:
+        key_source = key_source.where(predicate)
+    key_subquery = key_source.group_by(
+        combined.c.user_email, combined.c.environment, combined.c.report_date
+    ).subquery()
     total = db.execute(select(func.count()).select_from(key_subquery)).scalar() or 0
 
     page_rows = db.execute(query.offset((page - 1) * page_size).limit(page_size)).all()
@@ -334,11 +419,112 @@ def users_export(
     user_email: Optional[List[str]] = Query(default=None),
     environment: Optional[List[str]] = Query(default=None),
     search: Optional[str] = Query(default=None),
+    q: Optional[str] = Query(default=None),
+    sort_by: Optional[str] = Query(default=None),
+    sort_dir: str = Query(default="desc", pattern="^(asc|desc)$"),
+    format: str = Query(default="json", pattern="^(json|csv)$"),
     db: Session = Depends(get_db),
-) -> List[UserStats]:
-    query, _ = _users_grouped_query(date_from, date_to, user_email, environment, search)
+):
+    query, combined = _users_grouped_query(date_from, date_to, user_email, environment, search)
+    for predicate in _users_q_predicates(combined, q):
+        query = query.where(predicate)
+    query = _users_order(query, sort_by, sort_dir)
     rows = db.execute(query).all()
-    return [UserStats(**row._mapping) for row in rows]
+    items = [UserStats(**row._mapping) for row in rows]
+    return _maybe_csv(
+        items, format, f"testease-usage-{date_from}-to-{date_to}.csv",
+        [
+            "User", "Environment", "Date",
+            "Test cases created", "Test cases executed",
+            "TSD documents generated", "Test case documents generated",
+        ],
+        lambda r: [
+            r.user_email,
+            r.environment,
+            r.report_date.isoformat(),
+            r.test_cases_created,
+            r.test_cases_executed,
+            r.documents_generated,
+            r.test_case_documents_generated,
+        ],
+    )
+
+
+# --- /rollup twins: the server-side versions of the grouping the frontend
+# used to do in JS over the flat /users/export rows. Both are a second GROUP
+# BY over the exact same combined (user, environment, day) subquery /users
+# and /users/export are built on - identical filtering by construction, so a
+# rollup can never disagree with the flat fact table it summarizes.
+
+_METRIC_COLUMNS = (
+    "test_cases_created",
+    "test_cases_executed",
+    "documents_generated",
+    "test_case_documents_generated",
+)
+
+
+def _rollup_rows(
+    db: Session,
+    date_from: date,
+    date_to: date,
+    user_email: Optional[List[str]],
+    environment: Optional[List[str]],
+    search: Optional[str],
+    key: str,
+    other: str,
+    other_label: str,
+):
+    """One row per `key`, summing the four metrics and counting distinct days
+    and distinct `other` values - the same numbers the frontend's old
+    groupUsage() derived with Sets."""
+    _, combined = _users_grouped_query(date_from, date_to, user_email, environment, search)
+    key_col = getattr(combined.c, key)
+    q = (
+        select(
+            key_col.label(key),
+            *[func.sum(getattr(combined.c, m)).label(m) for m in _METRIC_COLUMNS],
+            func.count(func.distinct(combined.c.report_date)).label("active_days"),
+            func.count(func.distinct(getattr(combined.c, other))).label(other_label),
+        )
+        .group_by(key_col)
+        .order_by(key_col)
+    )
+    return db.execute(q).all()
+
+
+@router.get("/rollup/users", response_model=List[UserRollupStats], dependencies=[Depends(verify_dashboard_token)])
+def users_rollup(
+    date_from: date = Query(alias="from"),
+    date_to: date = Query(alias="to"),
+    user_email: Optional[List[str]] = Query(default=None),
+    environment: Optional[List[str]] = Query(default=None),
+    search: Optional[str] = Query(default=None),
+    db: Session = Depends(get_db),
+) -> List[UserRollupStats]:
+    rows = _rollup_rows(
+        db, date_from, date_to, user_email, environment, search, "user_email", "environment", "environments"
+    )
+    return [UserRollupStats(**row._mapping) for row in rows]
+
+
+@router.get(
+    "/rollup/environments",
+    response_model=List[EnvironmentRollupStats],
+    dependencies=[Depends(verify_dashboard_token)],
+)
+def environments_rollup(
+    date_from: date = Query(alias="from"),
+    date_to: date = Query(alias="to"),
+    user_email: Optional[List[str]] = Query(default=None),
+    environment: Optional[List[str]] = Query(default=None),
+    search: Optional[str] = Query(default=None),
+    db: Session = Depends(get_db),
+) -> List[EnvironmentRollupStats]:
+    rows = _rollup_rows(
+        db, date_from, date_to, user_email, environment, search, "environment", "user_email", "users"
+    )
+    return [EnvironmentRollupStats(**row._mapping) for row in rows]
 
 
 def _artifacts_branch(
@@ -452,6 +638,67 @@ def artifacts_export(
     return [ArtifactStats(**row._mapping) for row in rows]
 
 
+# --- Drawer-tab support: free-text `q` is ORed across the tab's text columns
+# and ANDed on top of the date/user/environment scope (never instead of it);
+# `sort_by` is validated against the tab's own columns; `format=csv` on the
+# /export twins streams the full filtered-and-sorted set so the CSV button
+# keeps meaning "everything the table shows" now that the table itself only
+# fetches one page at a time.
+
+
+def _q_predicates(q: Optional[str], search_cols):
+    if not q:
+        return []
+    like = f"%{q}%"
+    return [or_(*[col.ilike(like) for col in search_cols])]
+
+
+def _event_order(model, columns, sort_by: Optional[str], sort_dir: str):
+    if sort_by is None:
+        return (model.created_at.desc(),)
+    # JSONB columns (test_case_names) are excluded: sorting a JSON list has no
+    # meaningful order, and the frontend greys that header out to match.
+    sortable = {col.key: col for col in columns if not isinstance(col.type, JSONB)}
+    if sort_by not in sortable:
+        raise HTTPException(status_code=400, detail=f"Cannot sort by {sort_by!r}")
+    col = sortable[sort_by]
+    order = col.desc() if sort_dir == "desc" else col.asc()
+    # created_at tiebreak keeps page boundaries stable when the sort key repeats.
+    return (nulls_last(order), model.created_at.desc())
+
+
+def _csv_response(filename: str, header: List[str], rows) -> StreamingResponse:
+    def generate():
+        buf = io.StringIO()
+        writer = csv.writer(buf)
+        writer.writerow(header)
+        yield buf.getvalue()
+        buf.seek(0)
+        buf.truncate(0)
+        for row in rows:
+            writer.writerow(row)
+            yield buf.getvalue()
+            buf.seek(0)
+            buf.truncate(0)
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+def _maybe_csv(items, format: str, filename: str, header: List[str], row_fn: Callable):
+    """Return `items` as-is for JSON, or stream them as a CSV attachment."""
+    if format != "csv":
+        return items
+    return _csv_response(filename, header, (row_fn(r) for r in items))
+
+
+def _csv_time(value: datetime) -> str:
+    return value.replace(microsecond=0).isoformat(sep=" ")
+
+
 def _paginate_events(
     db: Session,
     model,
@@ -464,13 +711,24 @@ def _paginate_events(
     search: Optional[str],
     page: int,
     page_size: int,
+    q: Optional[str] = None,
+    sort_by: Optional[str] = None,
+    sort_dir: str = "desc",
+    search_cols=(),
 ):
-    total = _scoped(
+    predicates = _q_predicates(q, search_cols)
+    total_query = _scoped(
         db.query(func.count(model.id)), model, date_from, date_to, user_email, environment, search
-    ).scalar() or 0
+    )
+    for predicate in predicates:
+        total_query = total_query.filter(predicate)
+    total = total_query.scalar() or 0
+
+    rows_query = _scoped(db.query(*columns), model, date_from, date_to, user_email, environment, search)
+    for predicate in predicates:
+        rows_query = rows_query.filter(predicate)
     rows = (
-        _scoped(db.query(*columns), model, date_from, date_to, user_email, environment, search)
-        .order_by(model.created_at.desc())
+        rows_query.order_by(*_event_order(model, columns, sort_by, sort_dir))
         .offset((page - 1) * page_size)
         .limit(page_size)
         .all()
@@ -488,13 +746,46 @@ def _export_events(
     user_email: Optional[List[str]],
     environment: Optional[List[str]],
     search: Optional[str],
+    q: Optional[str] = None,
+    sort_by: Optional[str] = None,
+    sort_dir: str = "desc",
+    search_cols=(),
 ):
-    rows = (
-        _scoped(db.query(*columns), model, date_from, date_to, user_email, environment, search)
-        .order_by(model.created_at.desc())
-        .all()
-    )
+    rows_query = _scoped(db.query(*columns), model, date_from, date_to, user_email, environment, search)
+    for predicate in _q_predicates(q, search_cols):
+        rows_query = rows_query.filter(predicate)
+    rows = rows_query.order_by(*_event_order(model, columns, sort_by, sort_dir)).all()
     return [schema(**r._mapping) for r in rows]
+
+
+# Text columns each tab's free-text `q` matches against. tc-doc includes the
+# JSONB name list via a text cast so "which document mentioned this test case"
+# keeps working like the old client-side any-cell filter.
+
+_CREATED_SEARCH = (
+    TestCaseCreatedEvent.user_email,
+    TestCaseCreatedEvent.environment,
+    TestCaseCreatedEvent.interface_name,
+    TestCaseCreatedEvent.test_case_name,
+)
+_EXECUTED_SEARCH = (
+    TestCaseExecutedEvent.user_email,
+    TestCaseExecutedEvent.environment,
+    TestCaseExecutedEvent.interface_name,
+    TestCaseExecutedEvent.test_case_name,
+)
+_DOCUMENT_SEARCH = (
+    DocumentGeneratedEvent.user_email,
+    DocumentGeneratedEvent.environment,
+    DocumentGeneratedEvent.interface_name,
+)
+_TC_DOC_SEARCH = (
+    TestCaseDocumentGeneratedEvent.user_email,
+    TestCaseDocumentGeneratedEvent.environment,
+    TestCaseDocumentGeneratedEvent.interface_name,
+    TestCaseDocumentGeneratedEvent.suite_name,
+    cast(TestCaseDocumentGeneratedEvent.test_case_names, String),
+)
 
 
 @router.get("/created-events", response_model=Page[CreatedEventDetail], dependencies=[Depends(verify_dashboard_token)])
@@ -506,6 +797,9 @@ def created_events(
     search: Optional[str] = Query(default=None),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=10, ge=1, le=200),
+    q: Optional[str] = Query(default=None),
+    sort_by: Optional[str] = Query(default=None),
+    sort_dir: str = Query(default="desc", pattern="^(asc|desc)$"),
     db: Session = Depends(get_db),
 ) -> Page[CreatedEventDetail]:
     return _paginate_events(
@@ -520,6 +814,7 @@ def created_events(
         ),
         CreatedEventDetail,
         date_from, date_to, user_email, environment, search, page, page_size,
+        q, sort_by, sort_dir, _CREATED_SEARCH,
     )
 
 
@@ -532,9 +827,13 @@ def created_events_export(
     user_email: Optional[List[str]] = Query(default=None),
     environment: Optional[List[str]] = Query(default=None),
     search: Optional[str] = Query(default=None),
+    q: Optional[str] = Query(default=None),
+    sort_by: Optional[str] = Query(default=None),
+    sort_dir: str = Query(default="desc", pattern="^(asc|desc)$"),
+    format: str = Query(default="json", pattern="^(json|csv)$"),
     db: Session = Depends(get_db),
-) -> List[CreatedEventDetail]:
-    return _export_events(
+):
+    items = _export_events(
         db,
         TestCaseCreatedEvent,
         (
@@ -546,6 +845,12 @@ def created_events_export(
         ),
         CreatedEventDetail,
         date_from, date_to, user_email, environment, search,
+        q, sort_by, sort_dir, _CREATED_SEARCH,
+    )
+    return _maybe_csv(
+        items, format, "testease-created.csv",
+        ["User", "Environment", "Interface", "Test case", "Created at"],
+        lambda r: [r.user_email, r.environment, r.interface_name, r.test_case_name, _csv_time(r.created_at)],
     )
 
 
@@ -560,6 +865,9 @@ def executed_events(
     search: Optional[str] = Query(default=None),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=10, ge=1, le=200),
+    q: Optional[str] = Query(default=None),
+    sort_by: Optional[str] = Query(default=None),
+    sort_dir: str = Query(default="desc", pattern="^(asc|desc)$"),
     db: Session = Depends(get_db),
 ) -> Page[ExecutedEventDetail]:
     return _paginate_events(
@@ -574,6 +882,7 @@ def executed_events(
         ),
         ExecutedEventDetail,
         date_from, date_to, user_email, environment, search, page, page_size,
+        q, sort_by, sort_dir, _EXECUTED_SEARCH,
     )
 
 
@@ -586,9 +895,13 @@ def executed_events_export(
     user_email: Optional[List[str]] = Query(default=None),
     environment: Optional[List[str]] = Query(default=None),
     search: Optional[str] = Query(default=None),
+    q: Optional[str] = Query(default=None),
+    sort_by: Optional[str] = Query(default=None),
+    sort_dir: str = Query(default="desc", pattern="^(asc|desc)$"),
+    format: str = Query(default="json", pattern="^(json|csv)$"),
     db: Session = Depends(get_db),
-) -> List[ExecutedEventDetail]:
-    return _export_events(
+):
+    items = _export_events(
         db,
         TestCaseExecutedEvent,
         (
@@ -600,6 +913,12 @@ def executed_events_export(
         ),
         ExecutedEventDetail,
         date_from, date_to, user_email, environment, search,
+        q, sort_by, sort_dir, _EXECUTED_SEARCH,
+    )
+    return _maybe_csv(
+        items, format, "testease-executed.csv",
+        ["User", "Environment", "Interface", "Test case", "Executed at"],
+        lambda r: [r.user_email, r.environment, r.interface_name, r.test_case_name, _csv_time(r.created_at)],
     )
 
 
@@ -614,6 +933,9 @@ def document_events(
     search: Optional[str] = Query(default=None),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=10, ge=1, le=200),
+    q: Optional[str] = Query(default=None),
+    sort_by: Optional[str] = Query(default=None),
+    sort_dir: str = Query(default="desc", pattern="^(asc|desc)$"),
     db: Session = Depends(get_db),
 ) -> Page[DocumentEventDetail]:
     return _paginate_events(
@@ -627,6 +949,7 @@ def document_events(
         ),
         DocumentEventDetail,
         date_from, date_to, user_email, environment, search, page, page_size,
+        q, sort_by, sort_dir, _DOCUMENT_SEARCH,
     )
 
 
@@ -639,9 +962,13 @@ def document_events_export(
     user_email: Optional[List[str]] = Query(default=None),
     environment: Optional[List[str]] = Query(default=None),
     search: Optional[str] = Query(default=None),
+    q: Optional[str] = Query(default=None),
+    sort_by: Optional[str] = Query(default=None),
+    sort_dir: str = Query(default="desc", pattern="^(asc|desc)$"),
+    format: str = Query(default="json", pattern="^(json|csv)$"),
     db: Session = Depends(get_db),
-) -> List[DocumentEventDetail]:
-    return _export_events(
+):
+    items = _export_events(
         db,
         DocumentGeneratedEvent,
         (
@@ -652,6 +979,12 @@ def document_events_export(
         ),
         DocumentEventDetail,
         date_from, date_to, user_email, environment, search,
+        q, sort_by, sort_dir, _DOCUMENT_SEARCH,
+    )
+    return _maybe_csv(
+        items, format, "testease-documents.csv",
+        ["User", "Environment", "Interface", "Generated at"],
+        lambda r: [r.user_email, r.environment, r.interface_name, _csv_time(r.created_at)],
     )
 
 
@@ -668,6 +1001,9 @@ def test_case_document_events(
     search: Optional[str] = Query(default=None),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=10, ge=1, le=200),
+    q: Optional[str] = Query(default=None),
+    sort_by: Optional[str] = Query(default=None),
+    sort_dir: str = Query(default="desc", pattern="^(asc|desc)$"),
     db: Session = Depends(get_db),
 ) -> Page[TestCaseDocumentEventDetail]:
     return _paginate_events(
@@ -684,6 +1020,7 @@ def test_case_document_events(
         ),
         TestCaseDocumentEventDetail,
         date_from, date_to, user_email, environment, search, page, page_size,
+        q, sort_by, sort_dir, _TC_DOC_SEARCH,
     )
 
 
@@ -698,9 +1035,13 @@ def test_case_document_events_export(
     user_email: Optional[List[str]] = Query(default=None),
     environment: Optional[List[str]] = Query(default=None),
     search: Optional[str] = Query(default=None),
+    q: Optional[str] = Query(default=None),
+    sort_by: Optional[str] = Query(default=None),
+    sort_dir: str = Query(default="desc", pattern="^(asc|desc)$"),
+    format: str = Query(default="json", pattern="^(json|csv)$"),
     db: Session = Depends(get_db),
-) -> List[TestCaseDocumentEventDetail]:
-    return _export_events(
+):
+    items = _export_events(
         db,
         TestCaseDocumentGeneratedEvent,
         (
@@ -714,6 +1055,20 @@ def test_case_document_events_export(
         ),
         TestCaseDocumentEventDetail,
         date_from, date_to, user_email, environment, search,
+        q, sort_by, sort_dir, _TC_DOC_SEARCH,
+    )
+    return _maybe_csv(
+        items, format, "testease-tc-documents.csv",
+        ["User", "Environment", "Interface", "Suite", "Test cases", "Count", "Generated at"],
+        lambda r: [
+            r.user_email,
+            r.environment or "",
+            r.interface_name or "",
+            r.suite_name,
+            ", ".join(r.test_case_names),
+            r.test_case_count,
+            _csv_time(r.created_at),
+        ],
     )
 
 

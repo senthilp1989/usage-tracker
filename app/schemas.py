@@ -132,6 +132,10 @@ class StatsSummary(BaseModel):
     test_cases_executed: int
     documents_generated: int
     test_case_documents_generated: int
+    # Distinct calendar days / environments with any activity in scope - the
+    # hero facts the frontend used to derive from the flat /users/export rows.
+    active_days: int
+    environments_active: int
 
 
 class DailyStats(BaseModel):
@@ -160,6 +164,31 @@ class UserEnvironmentStats(BaseModel):
     test_cases_executed: int
     documents_generated: int
     test_case_documents_generated: int
+
+
+# The /rollup twins keep the four metrics as separate columns on purpose: the
+# frontend's legend toggles re-total client-side from whichever metrics are
+# switched on, so a pre-summed total would turn every toggle into a refetch.
+
+
+class UserRollupStats(BaseModel):
+    user_email: str
+    test_cases_created: int
+    test_cases_executed: int
+    documents_generated: int
+    test_case_documents_generated: int
+    active_days: int
+    environments: int
+
+
+class EnvironmentRollupStats(BaseModel):
+    environment: str
+    test_cases_created: int
+    test_cases_executed: int
+    documents_generated: int
+    test_case_documents_generated: int
+    active_days: int
+    users: int
 
 
 class ArtifactStats(BaseModel):

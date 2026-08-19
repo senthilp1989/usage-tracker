@@ -1,11 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
 import {
+  downloadTableCsv,
   fetchArtifactsExport,
   fetchDaily,
   fetchEnvironmentIds,
+  fetchEnvironmentsRollup,
   fetchSummary,
   fetchUserEmails,
-  fetchUsersExport,
+  fetchUserEnvironmentRollup,
+  fetchUsersRollup,
   getAccount,
   UnauthorizedError,
 } from "./api";
@@ -22,13 +25,7 @@ import Hero from "./components/Hero";
 import KpiTile from "./components/KpiTile";
 import RankedBars, { type RankEntry } from "./components/RankedBars";
 import Tip, { type TipState } from "./components/Tip";
-import {
-  downloadCsv,
-  fullDate,
-  monthsBackStart,
-  spanDays,
-  todayIso,
-} from "./format";
+import { fullDate, monthsBackStart, spanDays, todayIso } from "./format";
 import type { Theme } from "./theme";
 import {
   METRICS,
@@ -37,9 +34,11 @@ import {
   type ArtifactStats,
   type DailyStats,
   type DateRange,
+  type EnvironmentRollupStats,
   type MetricTuple,
   type StatsSummary,
-  type UserStats,
+  type UserEnvironmentStats,
+  type UserRollupStats,
 } from "./types";
 
 const TOP_INTERFACES = 8;
@@ -48,8 +47,8 @@ const TOP_INTERFACES = 8;
  *  fixed window of whole calendar months. It exists because the page filter is
  *  capped at 90 days (FilterBar), which clips the first and last month of any
  *  monthly view - fine for a trend, useless for comparing months. Scoped to
- *  that one chart on purpose: widening the whole page would double the
- *  unpaginated /export payloads every panel below depends on. */
+ *  that one chart on purpose: widening the whole page would widen every
+ *  scoped fetch below (rollups, artifacts, the drawer's counts) with it. */
 const CHART_WIDE_MONTHS = 6;
 
 function zeroFill(range: DateRange, rows: DailyStats[]): DailyStats[] {
@@ -116,36 +115,9 @@ function sumMetrics(s: StatsSummary | null): number {
   );
 }
 
-/** Rolls the flat (user, environment, day) fact table up by one key, keeping
- *  the distinct counts the ranked-bar sub-lines need. */
-function groupUsage(
-  rows: UserStats[],
-  keyOf: (r: UserStats) => string,
-  otherOf: (r: UserStats) => string,
-): { name: string; values: MetricTuple; days: number; others: number }[] {
-  const map = new Map<
-    string,
-    { values: MetricTuple; days: Set<string>; others: Set<string> }
-  >();
-  for (const r of rows) {
-    const key = keyOf(r);
-    const entry = map.get(key) ?? {
-      values: [0, 0, 0, 0] as MetricTuple,
-      days: new Set(),
-      others: new Set(),
-    };
-    METRICS.forEach((m, i) => (entry.values[i] += r[m.key]));
-    entry.days.add(r.report_date);
-    entry.others.add(otherOf(r));
-    map.set(key, entry);
-  }
-  return [...map.entries()].map(([name, e]) => ({
-    name,
-    values: e.values,
-    days: e.days.size,
-    others: e.others.size,
-  }));
-}
+// The by-user/by-environment grouping that used to happen here in JS (over
+// the flat /users/export rows) now happens in Postgres - see the /rollup
+// twins in api.ts. The page only reshapes the returned rows for display.
 
 export default function Dashboard({
   onLogout,
@@ -167,9 +139,17 @@ export default function Dashboard({
   const [summary, setSummary] = useState<StatsSummary | null>(null);
   const [prevSummary, setPrevSummary] = useState<StatsSummary | null>(null);
   const [daily, setDaily] = useState<DailyStats[]>([]);
-  const [usageRows, setUsageRows] = useState<UserStats[]>([]);
-  const [optionRows, setOptionRows] = useState<UserStats[]>([]);
+  const [userRollup, setUserRollup] = useState<UserRollupStats[]>([]);
+  const [envRollup, setEnvRollup] = useState<EnvironmentRollupStats[]>([]);
+  const [pairRollup, setPairRollup] = useState<UserEnvironmentStats[]>([]);
+  const [optionUserRollup, setOptionUserRollup] = useState<
+    UserRollupStats[] | null
+  >(null);
+  const [optionEnvRollup, setOptionEnvRollup] = useState<
+    EnvironmentRollupStats[] | null
+  >(null);
   const [artifacts, setArtifacts] = useState<ArtifactStats[]>([]);
+  const [exporting, setExporting] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   // Activity chart's monthly override: fetched only while the chart says it
@@ -197,8 +177,11 @@ export default function Dashboard({
       setSummary(null);
       setPrevSummary(null);
       setDaily([]);
-      setUsageRows([]);
-      setOptionRows([]);
+      setUserRollup([]);
+      setEnvRollup([]);
+      setPairRollup([]);
+      setOptionUserRollup(null);
+      setOptionEnvRollup(null);
       setArtifacts([]);
       setError(null);
       setLoading(false);
@@ -215,24 +198,32 @@ export default function Dashboard({
       fetchSummary(range, user, environment),
       fetchSummary(previousRange(range), user, environment),
       fetchDaily(range, user, environment),
-      fetchUsersExport(range, user, environment),
+      fetchUsersRollup(range, user, environment),
+      fetchEnvironmentsRollup(range, user, environment),
+      fetchUserEnvironmentRollup(range, user, environment),
       fetchArtifactsExport(range, user, environment),
       fetchUserEmails(),
       fetchEnvironmentIds(),
-      unscoped ? Promise.resolve(null) : fetchUsersExport(range),
+      unscoped ? Promise.resolve(null) : fetchUsersRollup(range),
+      unscoped ? Promise.resolve(null) : fetchEnvironmentsRollup(range),
     ])
-      .then(([s, prevS, d, usage, a, emails, envIds, options]) => {
-        if (cancelled) return;
-        setSummary(s);
-        setPrevSummary(prevS);
-        setDaily(d);
-        setUsageRows(usage);
-        setOptionRows(options ?? usage);
-        setArtifacts(a);
-        setUserEmails(emails);
-        setEnvironmentIds(envIds);
-        setError(null);
-      })
+      .then(
+        ([s, prevS, d, uRoll, eRoll, pairs, a, emails, envIds, optU, optE]) => {
+          if (cancelled) return;
+          setSummary(s);
+          setPrevSummary(prevS);
+          setDaily(d);
+          setUserRollup(uRoll);
+          setEnvRollup(eRoll);
+          setPairRollup(pairs);
+          setOptionUserRollup(optU);
+          setOptionEnvRollup(optE);
+          setArtifacts(a);
+          setUserEmails(emails);
+          setEnvironmentIds(envIds);
+          setError(null);
+        },
+      )
       .catch((err) => {
         if (cancelled) return;
         if (err instanceof UnauthorizedError) onLogout();
@@ -295,21 +286,23 @@ export default function Dashboard({
 
   const byUser = useMemo(
     () =>
-      groupUsage(
-        usageRows,
-        (r) => r.user_email,
-        (r) => r.environment,
-      ),
-    [usageRows],
+      userRollup.map((r) => ({
+        name: r.user_email,
+        values: metricTuple(r),
+        days: r.active_days,
+        others: r.environments,
+      })),
+    [userRollup],
   );
   const byEnvironment = useMemo(
     () =>
-      groupUsage(
-        usageRows,
-        (r) => r.environment,
-        (r) => r.user_email,
-      ),
-    [usageRows],
+      envRollup.map((r) => ({
+        name: r.environment,
+        values: metricTuple(r),
+        days: r.active_days,
+        others: r.users,
+      })),
+    [envRollup],
   );
 
   const rank = (
@@ -369,51 +362,53 @@ export default function Dashboard({
 
   const heatCells = useMemo<HeatCell[]>(
     () =>
-      usageRows
+      pairRollup
         .map((r) => ({
           row: r.user_email,
           column: r.environment,
           value: tupleTotal(metricTuple(r), series),
         }))
         .filter((c) => c.value > 0),
-    [usageRows, series],
+    [pairRollup, series],
   );
 
+  // The dropdown counts deliberately ignore the user/environment selection
+  // (each row keeps its own period total) - so they come from the unscoped
+  // rollups when a filter is active, and from the scoped ones otherwise.
   const optionCounts = useMemo(() => {
     const users: Record<string, number> = {};
     const envs: Record<string, number> = {};
-    for (const r of optionRows) {
-      const total = tupleTotal(metricTuple(r));
-      users[r.user_email] = (users[r.user_email] ?? 0) + total;
-      envs[r.environment] = (envs[r.environment] ?? 0) + total;
-    }
+    for (const r of optionUserRollup ?? userRollup)
+      users[r.user_email] = tupleTotal(metricTuple(r));
+    for (const r of optionEnvRollup ?? envRollup)
+      envs[r.environment] = tupleTotal(metricTuple(r));
     return { users, envs };
-  }, [optionRows]);
+  }, [optionUserRollup, optionEnvRollup, userRollup, envRollup]);
 
-  const activeDays = useMemo(
-    () => new Set(usageRows.map((r) => r.report_date)).size,
-    [usageRows],
-  );
-  const environmentCount = useMemo(
-    () => new Set(usageRows.map((r) => r.environment)).size,
-    [usageRows],
-  );
+  const activeDays = summary?.active_days ?? 0;
+  const environmentCount = summary?.environments_active ?? 0;
   const interfaceCount = useMemo(
     () => new Set(interfaceRank.map((i) => i.name)).size,
     [interfaceRank],
   );
 
+  // The CSV wants the flat (user, environment, day) rows, which no longer
+  // arrive on page load - the server builds the file when the button is
+  // actually clicked, honoring the same scope, and streams it to disk.
   function exportSlice() {
-    downloadCsv(
+    setExporting(true);
+    downloadTableCsv(
+      "/dashboard/users/export",
       `testease-usage-${range.from}-to-${range.to}.csv`,
-      ["User", "Environment", "Date", ...METRICS.map((m) => m.label)],
-      usageRows.map((r) => [
-        r.user_email,
-        r.environment,
-        r.report_date,
-        ...METRICS.map((m) => r[m.key]),
-      ]),
-    );
+      range,
+      user,
+      environment,
+    )
+      .catch((err) => {
+        if (err instanceof UnauthorizedError) onLogout();
+        else setError("Could not export the CSV — is the API running?");
+      })
+      .finally(() => setExporting(false));
   }
 
   return (
@@ -443,7 +438,7 @@ export default function Dashboard({
           applyPreset(DEFAULT_PRESET);
         }}
         onExport={exportSlice}
-        exportDisabled={usageRows.length === 0}
+        exportDisabled={userRollup.length === 0 || exporting}
       />
 
       {/* On refetch the previous render is held at reduced opacity - no
@@ -600,7 +595,7 @@ export default function Dashboard({
           range={range}
           userEmails={user}
           environment={environment}
-          usageRows={usageRows}
+          userRollup={userRollup}
           artifactRows={artifacts}
         />
       </main>

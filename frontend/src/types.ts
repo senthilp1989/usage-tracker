@@ -4,6 +4,8 @@ export interface StatsSummary {
   test_cases_executed: number;
   documents_generated: number;
   test_case_documents_generated: number;
+  active_days: number;
+  environments_active: number;
 }
 
 export interface DailyStats {
@@ -32,6 +34,29 @@ export interface UserEnvironmentStats {
   test_cases_executed: number;
   documents_generated: number;
   test_case_documents_generated: number;
+}
+
+// The /rollup twins carry the four metrics separately (never a pre-summed
+// total) so the legend toggles can re-total client-side without a refetch.
+
+export interface UserRollupStats {
+  user_email: string;
+  test_cases_created: number;
+  test_cases_executed: number;
+  documents_generated: number;
+  test_case_documents_generated: number;
+  active_days: number;
+  environments: number;
+}
+
+export interface EnvironmentRollupStats {
+  environment: string;
+  test_cases_created: number;
+  test_cases_executed: number;
+  documents_generated: number;
+  test_case_documents_generated: number;
+  active_days: number;
+  users: number;
 }
 
 export interface ArtifactStats {
