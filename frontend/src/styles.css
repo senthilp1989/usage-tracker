@@ -815,6 +815,11 @@ header.app {
   font-weight: 500;
 }
 
+.seg button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
 .seg button[aria-pressed="true"] {
   background: var(--surface);
   color: var(--ink);
@@ -1941,6 +1946,461 @@ table.data tbody tr:hover {
   white-space: nowrap;
 }
 
+/* ── customer model: feature grid, meters, market map, mapping tab ─────
+   Added alongside the existing panels, not in place of them: the customer
+   axis is a rollup on top of the environment axis, so everything above keeps
+   working unchanged when Group by is left on Environment. */
+
+/* The feature grid needs more width than the meters beside it, so the wide
+   variant gives the data grid the room and leaves the narrower panel narrow. */
+.two-up.wide {
+  grid-template-columns: 1.55fr 1fr;
+}
+
+.two-up.top {
+  align-items: start;
+}
+
+/* Feature columns are labelled with the metric name and its colour dot, so
+   they wrap rather than rotate the way the environment axis does. */
+.heat th.feat {
+  text-align: center;
+  white-space: normal;
+  max-width: 104px;
+  line-height: 1.3;
+  vertical-align: bottom;
+}
+
+.heat th.feat .k-dot {
+  margin-right: 5px;
+  vertical-align: middle;
+}
+
+.heat th.ctr {
+  text-align: center;
+  padding-left: 10px;
+}
+
+/* Breadth is a verdict, not a volume - it gets status colour plus the "n/4"
+   text, never colour alone. */
+.heat td.tot.breadth.full {
+  color: var(--good-text);
+}
+
+.heat td.tot.breadth.thin {
+  color: var(--muted);
+}
+
+/* The pattern that matched, shown next to a rule-resolved row. */
+.reg-rule {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10.5px;
+  color: var(--muted);
+  background: var(--surface-3);
+  padding: 1px 6px;
+  border-radius: 4px;
+  word-break: break-all;
+}
+
+/* Environment options bucketed under the customer that caught them. */
+.popgrp {
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+  padding: 8px 10px 4px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.popgrp button {
+  background: none;
+  border: none;
+  color: var(--accent);
+  font-size: 11px;
+  cursor: pointer;
+  padding: 0;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+  margin-left: auto;
+}
+
+.popgrp button:hover {
+  text-decoration: underline;
+}
+
+/* ── outcome meters ─────────────────────────────────────── */
+.meters {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.meter .m-top {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: 7px;
+}
+
+.meter .m-label {
+  font-size: 12.5px;
+  color: var(--ink-2);
+  font-weight: 500;
+}
+
+.meter .m-val {
+  margin-left: auto;
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  line-height: 1;
+}
+
+.meter .m-track {
+  position: relative;
+  height: 9px;
+  border-radius: 5px;
+  background: var(--surface-3);
+}
+
+.meter .m-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: 5px;
+  transition: width 0.4s ease;
+}
+
+/* The target tick overhangs the track on both edges so it reads as a
+   threshold marker rather than as part of the fill. */
+.meter .m-target {
+  position: absolute;
+  top: -4px;
+  width: 2px;
+  height: 17px;
+  background: var(--ink);
+  border-radius: 1px;
+}
+
+.meter .m-foot {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 8px;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.meter .m-foot .verdict {
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.meter .m-foot .verdict.ok {
+  color: var(--good-text);
+}
+
+.meter .m-foot .verdict.no {
+  color: var(--critical-text);
+}
+
+/* ── tile-grid market map ───────────────────────────────── */
+.market-sub {
+  margin: 0 0 14px;
+}
+
+.tilewrap {
+  display: flex;
+  gap: 22px;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  overflow-x: auto;
+  padding-bottom: 4px;
+}
+
+.tilemap {
+  display: grid;
+  grid-template-columns: repeat(10, 46px);
+  grid-template-rows: repeat(4, 46px);
+  gap: 4px;
+  flex: none;
+}
+
+.tile {
+  border-radius: 7px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  font-size: 11px;
+  cursor: default;
+  border: 1px solid var(--line);
+}
+
+.tile.blank {
+  background: transparent;
+  border-color: transparent;
+}
+
+.tile .cc {
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.tile .n {
+  font-size: 12px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.offmap {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 190px;
+  flex: 1;
+}
+
+.offmap .offrow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 11px;
+  border-radius: 9px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+}
+
+.offmap .offrow.busiest {
+  background: var(--accent-wash);
+  border-color: transparent;
+}
+
+.offmap .offrow.note-row {
+  border-style: dashed;
+  border-color: var(--line-strong);
+  align-items: flex-start;
+}
+
+.offmap .offrow .cc {
+  font-weight: 700;
+  font-size: 11.5px;
+  min-width: 34px;
+}
+
+.offmap .offrow .lb {
+  font-size: 11.5px;
+  color: var(--muted);
+  flex: 1;
+  line-height: 1.35;
+}
+
+.offmap .offrow .n {
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  font-size: 13px;
+}
+
+.scale {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 14px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.scale .ramp {
+  display: flex;
+  gap: 2px;
+}
+
+.scale .ramp i {
+  width: 22px;
+  height: 9px;
+  border-radius: 2px;
+  display: block;
+}
+
+/* ── admin: customer mapping tab ────────────────────────── */
+.maptools {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 0 20px 14px;
+}
+
+.maptools .spacer {
+  flex: 1;
+}
+
+.maphint {
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+.addcust {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 34px;
+  padding: 0 4px 0 11px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 9px;
+}
+
+.addcust input {
+  border: none;
+  background: none;
+  outline: none;
+  font: inherit;
+  font-size: 13px;
+  color: var(--ink);
+  width: 168px;
+}
+
+.addcust input::placeholder {
+  color: var(--muted);
+}
+
+.addcust:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-wash);
+}
+
+.addcust button {
+  height: 26px;
+  padding: 0 10px;
+  border-radius: 7px;
+  border: none;
+  background: var(--accent);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.addcust button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.ovchip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 10px;
+  border-radius: 20px;
+  background: var(--accent-wash);
+  color: var(--accent-2);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+/* How a row resolved. Each state is a word, not just a colour. */
+.src {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: 5px;
+  white-space: nowrap;
+}
+
+.src.rule {
+  background: var(--surface-3);
+  color: var(--ink-2);
+}
+
+.src.manual {
+  background: var(--accent-wash);
+  color: var(--accent-2);
+}
+
+.src.none {
+  background: color-mix(in srgb, var(--warning) 18%, transparent);
+  color: #8a5a00;
+}
+
+:root[data-theme="dark"] .src.none {
+  color: #fab219;
+}
+
+.src.shares {
+  margin-left: 8px;
+}
+
+.mono.muted {
+  color: var(--muted);
+}
+
+select.custsel {
+  height: 32px;
+  padding: 0 8px;
+  border-radius: 8px;
+  border: 1px solid var(--line-strong);
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+select.custsel:hover {
+  border-color: var(--accent);
+}
+
+select.custsel.changed {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-wash);
+}
+
+.mapping .reg-rule {
+  display: inline-block;
+  margin-top: 5px;
+}
+
+.mapping .link-btn {
+  margin-left: 8px;
+}
+
+.map-note,
+.map-error {
+  margin: 14px 20px 18px;
+}
+
+/* Inline in a sentence here, rather than the table cell the base .mono rule
+   is written for - it must not become its own block or break mid-word. */
+.map-note .mono {
+  display: inline;
+  max-width: none;
+  word-break: normal;
+}
+
+.maptools .btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.maptools .btn:disabled:hover {
+  border-color: var(--line-strong);
+  color: inherit;
+}
+
+.map-error {
+  border-color: var(--critical);
+  color: var(--critical-text);
+}
+
 /* ── responsive ─────────────────────────────────────────── */
 @media (max-width: 1100px) {
   .hero-grid {
@@ -1949,7 +2409,8 @@ table.data tbody tr:hover {
   .kpi-row {
     grid-template-rows: auto auto;
   }
-  .two-up {
+  .two-up,
+  .two-up.wide {
     grid-template-columns: 1fr;
   }
 }

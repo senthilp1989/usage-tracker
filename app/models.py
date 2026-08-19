@@ -1,5 +1,15 @@
-from sqlalchemy import Column, DateTime, Integer, String, UniqueConstraint, text
+from sqlalchemy import (
+    Boolean,
+    Column,
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    UniqueConstraint,
+    text,
+)
 from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.orm import relationship
 
 from .database import Base
 
@@ -104,3 +114,68 @@ class TestCaseDocumentGeneratedEvent(Base):
     test_case_count = Column(Integer, nullable=False)
     created_at = Column(DateTime(timezone=False), nullable=False, index=True)
     reported_at = Column(DateTime(timezone=False), nullable=False, server_default=_IST_NOW)
+
+
+# --- Customer registry -------------------------------------------------
+#
+# Environments are what the source tool writes (`Heineken_Dev`, `Hei_Test`,
+# `Celanese_Qa`...); customers are what the business reports on. Nothing in
+# the event tables links the two, so the link lives here as a registry of
+# *rules* rather than a frozen list: a new environment that matches an
+# existing pattern joins its customer with no migration and no code change.
+#
+# Resolution is deliberately not done in SQL. The dashboard applies the
+# registry to the environment dimension of the aggregates it already fetches
+# (see frontend/src/customers.ts), which is what keeps a customer rollup and
+# an environment rollup arithmetically identical - they are the same rows,
+# folded one level further. These tables are the store, not the resolver.
+
+
+class Customer(Base):
+    """One row per customer the business reports on. `id` is a caller-supplied
+    slug rather than a serial so the seeded defaults keep stable ids across
+    environments and an override can name a customer without a lookup."""
+
+    __tablename__ = "customers"
+
+    id = Column(String(64), primary_key=True)
+    name = Column(String(255), nullable=False, unique=True)
+    is_internal = Column(Boolean, nullable=False, server_default=text("false"))
+    created_at = Column(DateTime(timezone=False), nullable=False, server_default=_IST_NOW)
+
+    rules = relationship(
+        "CustomerRule", back_populates="customer", cascade="all, delete-orphan", order_by="CustomerRule.position"
+    )
+
+
+class CustomerRule(Base):
+    """A match pattern for a customer, applied to the *normalised* environment
+    name (case-folded, separators collapsed to `_`). Ordered by `position`;
+    first match wins. Patterns use `(?=_|$)` rather than `\\b` - `_` is a word
+    character, so `^hei\\b` would not match `hei_test`."""
+
+    __tablename__ = "customer_rules"
+
+    id = Column(Integer, primary_key=True)
+    customer_id = Column(String(64), ForeignKey("customers.id", ondelete="CASCADE"), nullable=False, index=True)
+    pattern = Column(String(255), nullable=False)
+    note = Column(String(255), nullable=True)
+    position = Column(Integer, nullable=False, server_default=text("0"))
+    created_at = Column(DateTime(timezone=False), nullable=False, server_default=_IST_NOW)
+
+    customer = relationship("Customer", back_populates="rules")
+
+
+class EnvironmentMapping(Base):
+    """A manual override, keyed on the normalised environment name. Only
+    genuine exceptions live here: picking the value a rule would have produced
+    clears the row instead of storing a redundant one, so this table stays a
+    readable list of "the rules got these wrong". A NULL `customer_id` is an
+    explicit "leave this unassigned", which still beats a matching rule."""
+
+    __tablename__ = "environment_mappings"
+
+    name_normalised = Column(String(255), primary_key=True)
+    customer_id = Column(String(64), ForeignKey("customers.id", ondelete="CASCADE"), nullable=True, index=True)
+    resolved_by = Column(String(16), nullable=False, server_default="manual")
+    confirmed_at = Column(DateTime(timezone=False), nullable=False, server_default=_IST_NOW)

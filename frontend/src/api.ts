@@ -1,3 +1,4 @@
+import type { CustomerRegistry } from "./customers";
 import type {
   ArtifactStats,
   CreatedEventDetail,
@@ -34,6 +35,11 @@ export function clearToken(): void {
 
 export class UnauthorizedError extends Error {}
 
+/** A 409 carries a message written for the person who caused it (a customer
+ *  name already in use, say), so it is worth surfacing verbatim rather than
+ *  collapsing into the generic request-failed text. */
+export class ConflictError extends Error {}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
@@ -45,6 +51,13 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   if (res.status === 401) {
     clearToken();
     throw new UnauthorizedError("Session expired");
+  }
+  if (res.status === 409) {
+    const detail = await res
+      .json()
+      .then((b) => (b as { detail?: string }).detail)
+      .catch(() => undefined);
+    throw new ConflictError(detail ?? "Conflict");
   }
   if (!res.ok) throw new Error(`Request failed (${res.status})`);
   return res.json() as Promise<T>;
@@ -352,3 +365,25 @@ export const fetchArtifactsExport = (
   );
 
 export const fetchInterfaces = () => request<string[]>("/dashboard/interfaces");
+
+// --- Customer registry -------------------------------------------------
+//
+// The registry is the store; resolution happens on the client
+// (customers.ts), which is what keeps a customer rollup and an environment
+// rollup arithmetically identical - they are the same rows, folded one level
+// further - and lets the admin tab regroup the page live before saving.
+
+export const fetchCustomerRegistry = () =>
+  request<CustomerRegistry>("/customers/registry");
+
+/** Replaces the override set wholesale and creates any manual-only customers
+ *  the admin screen added. Returns the canonical registry the server ended up
+ *  with, so the page adopts that rather than trusting its own draft. */
+export const saveCustomerRegistry = (payload: {
+  customers: { id: string; name: string; is_internal: boolean }[];
+  environments: { name_normalised: string; customer_id: string | null }[];
+}) =>
+  request<CustomerRegistry>("/customers/registry", {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });

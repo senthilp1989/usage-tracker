@@ -8,7 +8,15 @@ import Heatmap, { type HeatCell } from "./Heatmap";
  * the same shape as the detail drawer's: a full-viewport panel over a backdrop,
  * Escape to leave, scrolling locked behind it.
  */
-export default function HeatmapCard({ cells }: { cells: HeatCell[] }) {
+export default function HeatmapCard({
+  cells,
+  columnLabel = "environment",
+}: {
+  cells: HeatCell[];
+  /** The dimension the columns are keyed on - "environment", or "customer"
+   *  when the page is grouped that way. */
+  columnLabel?: string;
+}) {
   const [expanded, setExpanded] = useState(false);
   // Fixed positioning pulls the card out of the two-up grid, so the slot it
   // leaves behind is held open at its last measured height - otherwise the
@@ -56,11 +64,11 @@ export default function HeatmapCard({ cells }: { cells: HeatCell[] }) {
         tabIndex={expanded ? -1 : undefined}
         role={expanded ? "dialog" : undefined}
         aria-modal={expanded ? true : undefined}
-        aria-label={expanded ? "User by environment, expanded" : undefined}
+        aria-label={expanded ? `User by ${columnLabel}, expanded` : undefined}
       >
         <div className="card-hd">
           <div>
-            <h2>User × environment</h2>
+            <h2>User × {columnLabel}</h2>
             <p className="sub">
               Total actions per pair. Empty cells mean no recorded usage in this
               period.

@@ -6,6 +6,13 @@ import RangeCalendar from "./RangeCalendar";
 
 export type Preset = "today" | "7d" | "30d" | "90d" | "custom";
 
+/** The dimension every rollup on the page keys on. Environment is the atomic
+ *  unit the source tool writes and stays the default; customer is a rollup on
+ *  top of it, resolved through the registry (see customers.ts). Filters and
+ *  detail tables are always environment-level either way - nothing is lost by
+ *  switching. */
+export type GroupBy = "environment" | "customer";
+
 const MAX_CUSTOM_RANGE_DAYS = 90;
 
 export const PRESETS: { id: Preset; label: string }[] = [
@@ -16,6 +23,10 @@ export const PRESETS: { id: Preset; label: string }[] = [
 ];
 
 export const DEFAULT_PRESET: Preset = "90d";
+
+/** Environment, so the page loads showing the dimension the source tool
+ *  actually writes. Customer is one click away. */
+export const DEFAULT_GROUP_BY: GroupBy = "environment";
 
 export function presetRange(preset: Preset, today: Date): DateRange {
   const iso = (d: Date) => d.toISOString().slice(0, 10);
@@ -90,6 +101,12 @@ const EnvIcon = (
 interface Props {
   preset: Preset;
   onPresetChange: (p: Preset) => void;
+  groupBy: GroupBy;
+  onGroupByChange: (g: GroupBy) => void;
+  /** Set when the registry is unavailable: grouping by customer would put
+   *  everything in one Unassigned bucket, which reads as data rather than as
+   *  a failure, so the option is disabled and says why. */
+  groupByCustomerDisabledReason?: string;
   range: DateRange;
   onRangeChange: (r: DateRange) => void;
   userEmails: string[];
@@ -101,6 +118,10 @@ interface Props {
   environment: string[];
   onEnvironmentChange: (e: string[]) => void;
   environmentCounts: Record<string, number>;
+  /** Customer each environment resolves to, for the grouped option list.
+   *  Absent while the registry is still loading, which just means a flat
+   *  list for a moment. */
+  environmentCustomer?: (environment: string) => string;
   onReset: () => void;
   onExport: () => void;
   exportDisabled: boolean;
@@ -109,6 +130,9 @@ interface Props {
 export default function FilterBar({
   preset,
   onPresetChange,
+  groupBy,
+  onGroupByChange,
+  groupByCustomerDisabledReason,
   range,
   onRangeChange,
   userEmails,
@@ -119,6 +143,7 @@ export default function FilterBar({
   environment,
   onEnvironmentChange,
   environmentCounts,
+  environmentCustomer,
   onReset,
   onExport,
   exportDisabled,
@@ -134,7 +159,10 @@ export default function FilterBar({
       : (PRESETS.find((p) => p.id === preset)?.label ?? "Last 90 days");
 
   const offDefault =
-    user.length > 0 || environment.length > 0 || preset !== DEFAULT_PRESET;
+    user.length > 0 ||
+    environment.length > 0 ||
+    preset !== DEFAULT_PRESET ||
+    groupBy !== DEFAULT_GROUP_BY;
 
   return (
     <div className="filters">
@@ -201,6 +229,34 @@ export default function FilterBar({
         </Popover>
 
         <span className="fl" style={{ marginLeft: 8 }}>
+          Group by
+        </span>
+        <div className="seg" role="group" aria-label="Group by">
+          {(
+            [
+              { id: "customer", label: "Customer" },
+              { id: "environment", label: "Environment" },
+            ] as const
+          ).map((option) => (
+            <button
+              key={option.id}
+              aria-pressed={groupBy === option.id}
+              disabled={
+                option.id === "customer" && !!groupByCustomerDisabledReason
+              }
+              title={
+                option.id === "customer"
+                  ? groupByCustomerDisabledReason
+                  : undefined
+              }
+              onClick={() => onGroupByChange(option.id)}
+            >
+              {option.label}
+            </button>
+          ))}
+        </div>
+
+        <span className="fl" style={{ marginLeft: 8 }}>
           Scope
         </span>
         <MultiPopover
@@ -226,6 +282,7 @@ export default function FilterBar({
           counts={environmentCounts}
           selected={environment}
           onChange={onEnvironmentChange}
+          groupOf={environmentCustomer}
         />
 
         {/* No chips for the active selection - the dropdown's own label and
@@ -275,6 +332,7 @@ function MultiPopover({
   counts,
   selected,
   onChange,
+  groupOf,
 }: {
   id: "user" | "env";
   openPop: string | null;
@@ -286,6 +344,11 @@ function MultiPopover({
   counts: Record<string, number>;
   selected: string[];
   onChange: (v: string[]) => void;
+  /** When given, options are bucketed under this heading with a per-bucket
+   *  "select all" - the environment list reads as a customer list that way,
+   *  which is how you scope to one customer without knowing its environments
+   *  by heart. */
+  groupOf?: (option: string) => string;
 }) {
   const [query, setQuery] = useState("");
   const open = openPop === id;
@@ -301,6 +364,43 @@ function MultiPopover({
       : selected.length === 1
         ? selected[0]
         : `${selected.length} ${noun}`;
+
+  // Buckets follow the visible list, so typing in the filter box narrows the
+  // headings too rather than leaving empty groups behind.
+  const buckets: [string, string[]][] = [];
+  if (groupOf) {
+    const byGroup = new Map<string, string[]>();
+    for (const option of visible) {
+      const key = groupOf(option);
+      if (!byGroup.has(key)) byGroup.set(key, []);
+      byGroup.get(key)!.push(option);
+    }
+    buckets.push(...byGroup);
+  }
+
+  const toggle = (option: string) =>
+    onChange(
+      selected.includes(option)
+        ? selected.filter((v) => v !== option)
+        : [...selected, option],
+    );
+
+  const optionRow = (option: string) => (
+    <button
+      type="button"
+      className="pop-row"
+      key={option}
+      role="option"
+      aria-selected={selected.includes(option)}
+      onClick={() => toggle(option)}
+    >
+      <span className="ck">✓</span>
+      <span className="nm" title={option}>
+        {option}
+      </span>
+      <span className="meta">{fmt(counts[option] ?? 0)}</span>
+    </button>
+  );
 
   return (
     <Popover
@@ -330,29 +430,33 @@ function MultiPopover({
           <div className="pop-row" style={{ color: "var(--muted)" }}>
             No matches
           </div>
-        ) : (
-          visible.map((o) => (
-            <button
-              type="button"
-              className="pop-row"
-              key={o}
-              role="option"
-              aria-selected={selected.includes(o)}
-              onClick={() =>
-                onChange(
-                  selected.includes(o)
-                    ? selected.filter((v) => v !== o)
-                    : [...selected, o],
-                )
-              }
-            >
-              <span className="ck">✓</span>
-              <span className="nm" title={o}>
-                {o}
-              </span>
-              <span className="meta">{fmt(counts[o] ?? 0)}</span>
-            </button>
+        ) : buckets.length > 0 ? (
+          buckets.map(([group, members]) => (
+            <div className="pop-group" key={group}>
+              <div className="popgrp">
+                <span>{group}</span>
+                <button
+                  type="button"
+                  className="link-btn"
+                  onClick={() =>
+                    onChange([
+                      ...selected.filter((v) => !members.includes(v)),
+                      ...(members.every((m) => selected.includes(m))
+                        ? []
+                        : members),
+                    ])
+                  }
+                >
+                  {members.every((m) => selected.includes(m))
+                    ? "Clear"
+                    : "Select all"}
+                </button>
+              </div>
+              {members.map(optionRow)}
+            </div>
           ))
+        ) : (
+          visible.map(optionRow)
         )}
       </div>
       <div className="pop-foot">

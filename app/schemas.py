@@ -1,7 +1,8 @@
+import re
 from datetime import date, datetime
 from typing import Generic, List, Optional, TypeVar
 
-from pydantic import BaseModel, EmailStr, field_validator
+from pydantic import BaseModel, EmailStr, Field, field_validator
 
 T = TypeVar("T")
 
@@ -231,3 +232,81 @@ class TestCaseDocumentEventDetail(BaseModel):
     test_case_names: List[str]
     test_case_count: int
     created_at: datetime
+
+
+# --- Customer registry (GET/PUT /customers/registry) ---
+#
+# The registry is a *store*, not a resolver: these shapes carry the customers,
+# their patterns and the manual overrides, and the dashboard applies them to
+# the environment dimension of the aggregates it already has. Keeping
+# resolution in one place (the client) is what stops a customer rollup and an
+# environment rollup from ever disagreeing - they are the same rows, folded
+# one level further.
+
+
+class CustomerOut(BaseModel):
+    id: str
+    name: str
+    is_internal: bool
+    patterns: List[str]
+
+
+class EnvironmentOverrideOut(BaseModel):
+    name_normalised: str
+    # None is an explicit "leave unassigned", which still beats a matching rule.
+    customer_id: Optional[str]
+
+
+class CustomerRegistryOut(BaseModel):
+    customers: List[CustomerOut]
+    overrides: List[EnvironmentOverrideOut]
+
+
+class CustomerIn(BaseModel):
+    # At least one alphanumeric, so an id of bare separators can't be stored.
+    # Keeping a punctuation-only *name* from slugging down to the shared "c_"
+    # prefix is the client's job (customers.ts `customerSlug` returns "" for
+    # one, and the admin screen refuses it) - the prefix convention is a
+    # client concern and this validator shouldn't encode it.
+    id: str = Field(min_length=1, max_length=64, pattern=r"^[a-z0-9_]*[a-z0-9][a-z0-9_]*$")
+    name: str = Field(min_length=1, max_length=255)
+    is_internal: bool = False
+
+    @field_validator("name")
+    @classmethod
+    def _strip_name(cls, value: str) -> str:
+        name = value.strip()
+        if not name:
+            raise ValueError("name cannot be blank")
+        return name
+
+
+def _normalise_environment_key(value: str) -> str:
+    # The same transform the client resolver applies before matching
+    # (customers.ts normalizeEnv): case-fold, trim, collapse `-`/whitespace to
+    # `_`. Applied again here so a caller that sends a raw name gets a row
+    # that actually matches at read time - storing "Tarento_Dev" verbatim
+    # would sit in the table looking like a live override while the resolver,
+    # which looks up "tarento_dev", never finds it.
+    return re.sub(r"[\s-]+", "_", value.strip().lower())
+
+
+class EnvironmentOverrideIn(BaseModel):
+    name_normalised: str = Field(min_length=1, max_length=255)
+    customer_id: Optional[str] = None
+
+    @field_validator("name_normalised")
+    @classmethod
+    def _normalise(cls, value: str) -> str:
+        return _normalise_environment_key(value)
+
+
+class CustomerRegistryIn(BaseModel):
+    """A full replacement of the override set, plus any manual-only customers
+    the admin screen created. `environments` is authoritative: whatever isn't
+    in it is dropped, which is how "reset this row" and "Revert all" persist.
+    Seeded customers and their patterns are never touched from here - adding a
+    pattern is a registry migration, not a dashboard action."""
+
+    customers: List[CustomerIn] = []
+    environments: List[EnvironmentOverrideIn] = []

@@ -8,7 +8,17 @@ import {
   fetchUsers,
   type TableQuery,
 } from "../api";
+import {
+  stageLabel,
+  stageOf,
+  type CustomerRegistry,
+  type Resolution,
+} from "../customers";
 import { downloadCsv, fmt, fullDate } from "../format";
+import CustomerMappingTab, {
+  mappingCsvRows,
+  type MappingHandlers,
+} from "./CustomerMappingTab";
 import {
   METRICS,
   type ArtifactStats,
@@ -40,6 +50,10 @@ interface TabDef {
   id: string;
   name: string;
   columns: Column[];
+  /** Renders its own body (the customer mapping editor) instead of the shared
+   *  table, and pages all its rows at once - the list is one row per
+   *  environment, which is short by construction. */
+  admin?: boolean;
   /** Undefined while a server-mode tab is still fetching its first page. */
   rows?: Row[];
   count: number;
@@ -185,12 +199,22 @@ export default function DetailDrawer({
   environment,
   userRollup,
   artifactRows,
+  mapping,
 }: {
   range: DateRange;
   userEmails: string[];
   environment: string[];
   userRollup: UserRollupStats[];
   artifactRows: ArtifactStats[];
+  /** Everything the admin Customer mapping tab needs. Omitted while the
+   *  registry is still loading, in which case the tab isn't offered. */
+  mapping?: {
+    registry: CustomerRegistry;
+    resolve: (environment: string) => Resolution;
+    environments: string[];
+    totals: Record<string, number>;
+    handlers: MappingHandlers;
+  };
 }) {
   const [tab, setTab] = useState(0);
   const [query, setQuery] = useState("");
@@ -374,8 +398,40 @@ export default function DetailDrawer({
         rows: serverRows,
         count: counts["tc-documents"] ?? 0,
       },
+      // Admin, and last: this tab writes shared reporting configuration
+      // (which environment belongs to which customer) rather than reading
+      // event rows like the six above it. Its "rows" exist only so the
+      // drawer's own filter box, record count and CSV button keep working -
+      // the editor itself renders from the environment names in column 0.
+      ...(mapping
+        ? [
+            {
+              id: "customer-mapping",
+              name: "Customer mapping",
+              admin: true,
+              columns: [
+                { label: "Environment" },
+                { label: "Customer" },
+                { label: "Stage" },
+              ],
+              rows: mapping.environments
+                .map((e): Row => {
+                  const resolution = mapping.resolve(e);
+                  return [
+                    e,
+                    resolution.unassigned ? "Unassigned" : resolution.name,
+                    stageLabel(stageOf(e)),
+                  ];
+                })
+                .sort((a, b) =>
+                  String(a[0]).localeCompare(String(b[0])),
+                ),
+              count: mapping.environments.length,
+            } satisfies TabDef,
+          ]
+        : []),
     ];
-  }, [userRollup, artifactRows, serverRows, counts]);
+  }, [userRollup, artifactRows, serverRows, counts, mapping]);
 
   const active = tabs[Math.min(tab, tabs.length - 1)];
   const serverId = SERVER_TABS.includes(active.id as ServerTabId)
@@ -432,12 +488,19 @@ export default function DetailDrawer({
     return rows;
   }, [active, query, sort, serverId, serverRows]);
 
+  const isAdmin = !!active.admin;
   const filteredTotal = serverId ? serverTotal : view.length;
-  const pageCount = Math.max(1, Math.ceil(filteredTotal / pageSize));
+  // The mapping tab is one row per environment - short by construction, and
+  // an editor you page through is an editor you lose your place in.
+  const pageCount = isAdmin
+    ? 1
+    : Math.max(1, Math.ceil(filteredTotal / pageSize));
   const current = Math.min(page, pageCount - 1);
   const visible = serverId
     ? (serverRows ?? [])
-    : view.slice(current * pageSize, (current + 1) * pageSize);
+    : isAdmin
+      ? view
+      : view.slice(current * pageSize, (current + 1) * pageSize);
 
   function toggleExpand() {
     const next = !expanded;
@@ -481,7 +544,14 @@ export default function DetailDrawer({
   }
 
   function downloadActiveCsv() {
-    if (serverId) {
+    if (isAdmin && mapping) {
+      const { header, rows } = mappingCsvRows(
+        visible.map((r) => String(r[0])),
+        mapping.resolve,
+        mapping.totals,
+      );
+      downloadCsv("testease-customer-mapping.csv", header, rows);
+    } else if (serverId) {
       setCsvBusy(true);
       downloadTableCsv(
         SERVER_CSV_PATHS[serverId],
@@ -553,7 +623,9 @@ export default function DetailDrawer({
           </div>
           <div style={{ flex: 1 }} />
           <span style={{ fontSize: 12.5, color: "var(--muted)" }}>
-            {fmt(filteredTotal)} record{filteredTotal === 1 ? "" : "s"}
+            {fmt(filteredTotal)}{" "}
+            {isAdmin ? "environment" : "record"}
+            {filteredTotal === 1 ? "" : "s"}
           </span>
           <button
             className="btn"
@@ -618,6 +690,15 @@ export default function DetailDrawer({
         <div className={`tbl-scroll${loading ? " loading-dim" : ""}`}>
           {error ? (
             <div className="empty">{error}</div>
+          ) : isAdmin && mapping ? (
+            <CustomerMappingTab
+              registry={mapping.registry}
+              resolve={mapping.resolve}
+              environments={visible.map((r) => String(r[0]))}
+              allEnvironments={mapping.environments}
+              totals={mapping.totals}
+              handlers={mapping.handlers}
+            />
           ) : active.rows === undefined ? (
             <div className="empty">Loading records…</div>
           ) : (
@@ -697,20 +778,22 @@ export default function DetailDrawer({
             </table>
           )}
         </div>
-        <div className="pager">
-          <span>
-            Page {current + 1} of {pageCount}
-          </span>
-          <button disabled={current === 0} onClick={() => setPage(current - 1)}>
-            Previous
-          </button>
-          <button
-            disabled={current >= pageCount - 1}
-            onClick={() => setPage(current + 1)}
-          >
-            Next
-          </button>
-        </div>
+        {!isAdmin && (
+          <div className="pager">
+            <span>
+              Page {current + 1} of {pageCount}
+            </span>
+            <button disabled={current === 0} onClick={() => setPage(current - 1)}>
+              Previous
+            </button>
+            <button
+              disabled={current >= pageCount - 1}
+              onClick={() => setPage(current + 1)}
+            >
+              Next
+            </button>
+          </div>
+        )}
       </section>
     </>
   );

@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import {
+  ConflictError,
   downloadTableCsv,
   fetchArtifactsExport,
+  fetchCustomerRegistry,
   fetchDaily,
   fetchEnvironmentIds,
   fetchEnvironmentsRollup,
@@ -10,22 +12,37 @@ import {
   fetchUserEnvironmentRollup,
   fetchUsersRollup,
   getAccount,
+  saveCustomerRegistry,
   UnauthorizedError,
 } from "./api";
 import ActivityChart from "./components/ActivityChart";
 import AppHeader from "./components/AppHeader";
 import DetailDrawer from "./components/DetailDrawer";
+import FeatureHeatmap, {
+  type FeatureMode,
+} from "./components/FeatureHeatmap";
 import FilterBar, {
+  DEFAULT_GROUP_BY,
   DEFAULT_PRESET,
   presetRange,
+  type GroupBy,
   type Preset,
 } from "./components/FilterBar";
+import MarketCoverage from "./components/MarketCoverage";
+import OutcomeMeters from "./components/OutcomeMeters";
 import { type HeatCell } from "./components/Heatmap";
 import HeatmapCard from "./components/HeatmapCard";
 import Hero from "./components/Hero";
 import KpiTile from "./components/KpiTile";
 import RankedBars, { type RankEntry } from "./components/RankedBars";
 import Tip, { type TipState } from "./components/Tip";
+import {
+  customerSlug,
+  EMPTY_REGISTRY,
+  makeResolver,
+  sameRegistry,
+  type CustomerRegistry,
+} from "./customers";
 import { fullDate, monthsBackStart, spanDays, todayIso } from "./format";
 import type { Theme } from "./theme";
 import {
@@ -163,11 +180,62 @@ export default function Dashboard({
   // turning a metric off has to mean the same thing everywhere on the page.
   const [series, setSeries] = useState<boolean[]>([true, true, true, true]);
   const [tip, setTip] = useState<TipState | null>(null);
+  // Environment is the atomic unit the source tool writes, so it stays the
+  // default; customer is a rollup on top of it. Switching regroups the
+  // leaderboard, the coverage heatmap and the feature grid - never the
+  // filters or the detail tables, which stay environment-level either way.
+  const [groupBy, setGroupBy] = useState<GroupBy>(DEFAULT_GROUP_BY);
+  const [featureMode, setFeatureMode] = useState<FeatureMode>("count");
+  // `registry` is the live draft the whole page resolves against, so an edit
+  // in the mapping tab regroups everything before it is saved;
+  // `savedRegistry` is what the server last confirmed, and the difference
+  // between them is what "Save mapping" would write.
+  const [registry, setRegistry] = useState<CustomerRegistry>(EMPTY_REGISTRY);
+  const [savedRegistry, setSavedRegistry] =
+    useState<CustomerRegistry>(EMPTY_REGISTRY);
+  const [registryReady, setRegistryReady] = useState(false);
+  const [savingRegistry, setSavingRegistry] = useState(false);
+  // Two separate failures with two different consequences: a load failure
+  // takes the whole customer axis away (and must say so, loudly, because an
+  // empty registry silently resolves every environment to "Unassigned" and
+  // that looks like real data); a save failure is local to the mapping tab.
+  const [registryLoadError, setRegistryLoadError] = useState<string | null>(
+    null,
+  );
+  const [registrySaveError, setRegistrySaveError] = useState<string | null>(
+    null,
+  );
 
   function applyPreset(p: Preset) {
     setPreset(p);
     setRange(presetRange(p, new Date()));
   }
+
+  // The registry is configuration, not data: it does not change with the
+  // date range or the scope, so it is fetched once rather than alongside
+  // every scoped refetch below.
+  useEffect(() => {
+    let cancelled = false;
+    fetchCustomerRegistry()
+      .then((r) => {
+        if (cancelled) return;
+        setRegistry(r);
+        setSavedRegistry(r);
+        setRegistryReady(true);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        if (err instanceof UnauthorizedError) onLogout();
+        else
+          setRegistryLoadError(
+            "Could not load the customer registry — grouping by customer is unavailable, and the Customer mapping tab is hidden. Everything else on this page is unaffected.",
+          );
+      });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     // Custom range starts with `to` empty (see FilterBar) - nothing is fetched
@@ -292,6 +360,7 @@ export default function Dashboard({
         values: metricTuple(r),
         days: r.active_days,
         others: r.environments,
+        environments: r.environments,
       })),
     [userRollup],
   );
@@ -306,14 +375,84 @@ export default function Dashboard({
     [envRollup],
   );
 
+  // --- customer axis ----------------------------------------------------
+  //
+  // Every customer-keyed panel below is one of the environment-keyed rollups
+  // folded one level further, so a customer total and the environment totals
+  // under it are the same rows by construction and cannot drift apart. That
+  // is the same guarantee the /rollup twins give the leaderboards: no panel
+  // gets its own filter logic.
+
+  const resolve = useMemo(() => makeResolver(registry), [registry]);
+  const dimensionOf = useMemo(
+    () => (environment: string) =>
+      groupBy === "customer" ? resolve(environment).name : environment,
+    [groupBy, resolve],
+  );
+  const dimensionLabel = groupBy === "customer" ? "customer" : "environment";
+
+  /** Actions per environment in the current scope - the figure the mapping
+   *  tab shows, so an admin can see what a reassignment moves before making
+   *  it. */
+  const environmentTotals = useMemo(() => {
+    const totals: Record<string, number> = {};
+    for (const r of envRollup)
+      totals[r.environment] = tupleTotal(metricTuple(r), series);
+    return totals;
+  }, [envRollup, series]);
+
+  /** Distinct users per grouping key, from the (user, environment) pairs -
+   *  a customer's user count is a set union, not a sum of its environments'
+   *  counts. Active days can't be derived the same way (the pair rollup has
+   *  no day dimension), which is why the customer sub-line says environments
+   *  and users rather than borrowing the per-environment day count. */
+  const usersPerDimension = useMemo(() => {
+    const map = new Map<string, Set<string>>();
+    for (const p of pairRollup) {
+      const key = dimensionOf(p.environment);
+      if (!map.has(key)) map.set(key, new Set());
+      map.get(key)!.add(p.user_email);
+    }
+    return map;
+  }, [pairRollup, dimensionOf]);
+
+  const byDimension = useMemo(() => {
+    if (groupBy === "environment")
+      return byEnvironment.map((e) => ({ ...e, environments: 1 }));
+    const map = new Map<
+      string,
+      { name: string; values: number[]; environments: Set<string> }
+    >();
+    for (const r of envRollup) {
+      const name = resolve(r.environment).name;
+      if (!map.has(name))
+        map.set(name, { name, values: [0, 0, 0, 0], environments: new Set() });
+      const entry = map.get(name)!;
+      metricTuple(r).forEach((v, i) => (entry.values[i] += v));
+      entry.environments.add(r.environment);
+    }
+    return [...map.values()].map((e) => ({
+      name: e.name,
+      values: e.values as MetricTuple,
+      days: 0,
+      others: usersPerDimension.get(e.name)?.size ?? 0,
+      environments: e.environments.size,
+    }));
+  }, [groupBy, byEnvironment, envRollup, resolve, usersPerDimension]);
+
   const rank = (
     items: {
       name: string;
       values: MetricTuple;
       days: number;
       others: number;
+      environments: number;
     }[],
-    sub: (e: { days: number; others: number }) => string,
+    sub: (e: {
+      days: number;
+      others: number;
+      environments: number;
+    }) => string,
   ): RankEntry[] =>
     items
       .map((e) => ({
@@ -334,14 +473,14 @@ export default function Dashboard({
       ),
     [byUser, series],
   );
-  const environmentRank = useMemo(
+  const dimensionRank = useMemo(
     () =>
-      rank(
-        byEnvironment,
-        (e) =>
-          `${e.others} user${e.others === 1 ? "" : "s"} · ${e.days} active day${e.days === 1 ? "" : "s"}`,
+      rank(byDimension, (e) =>
+        groupBy === "customer"
+          ? `${e.environments} environment${e.environments === 1 ? "" : "s"} · ${e.others} user${e.others === 1 ? "" : "s"}`
+          : `${e.others} user${e.others === 1 ? "" : "s"} · ${e.days} active day${e.days === 1 ? "" : "s"}`,
       ),
-    [byEnvironment, series],
+    [byDimension, groupBy, series],
   );
 
   const interfaceRank = useMemo<RankEntry[]>(
@@ -366,11 +505,11 @@ export default function Dashboard({
       pairRollup
         .map((r) => ({
           row: r.user_email,
-          column: r.environment,
+          column: dimensionOf(r.environment),
           value: tupleTotal(metricTuple(r), series),
         }))
         .filter((c) => c.value > 0),
-    [pairRollup, series],
+    [pairRollup, series, dimensionOf],
   );
 
   // The dropdown counts deliberately ignore the user/environment selection
@@ -392,6 +531,95 @@ export default function Dashboard({
     () => new Set(interfaceRank.map((i) => i.name)).size,
     [interfaceRank],
   );
+
+  // --- customer mapping (admin) -----------------------------------------
+  //
+  // Edits land in the draft `registry`, which every panel already resolves
+  // against, so a reassignment regroups the page immediately. Only "Save
+  // mapping" touches the server.
+
+  function setOverride(
+    nameNormalised: string,
+    customerId: string | null | undefined,
+  ) {
+    setRegistry((r) => {
+      const rest = r.overrides.filter(
+        (o) => o.name_normalised !== nameNormalised,
+      );
+      // `undefined` means "fall back to the rule", which is the absence of an
+      // override rather than an override onto the rule's own answer - that is
+      // what keeps the saved set a list of genuine exceptions.
+      return {
+        ...r,
+        overrides:
+          customerId === undefined
+            ? rest
+            : [
+                ...rest,
+                { name_normalised: nameNormalised, customer_id: customerId },
+              ],
+      };
+    });
+  }
+
+  /** Returns a reason the name was refused, or null when it was added. The
+   *  duplicate-name check matters twice over: `customers.name` is UNIQUE
+   *  server-side, and the page groups on the name, so a second "Heineken"
+   *  would merge two rollups into one row before the save even failed. */
+  function addCustomer(name: string): string | null {
+    const trimmed = name.trim();
+    const id = customerSlug(trimmed);
+    if (!id) return "Use a name with at least one letter or number.";
+    if (registry.customers.some((c) => c.id === id))
+      return `“${trimmed}” already exists.`;
+    if (
+      registry.customers.some(
+        (c) => c.name.toLowerCase() === trimmed.toLowerCase(),
+      )
+    )
+      return `A customer named “${trimmed}” already exists.`;
+    // Manual-only: no patterns, so it catches nothing on its own and only
+    // ever holds the environments someone assigns to it by hand.
+    setRegistry((r) => ({
+      ...r,
+      customers: [
+        ...r.customers,
+        { id, name: trimmed, is_internal: false, patterns: [] },
+      ],
+    }));
+    return null;
+  }
+
+  function saveRegistry() {
+    setSavingRegistry(true);
+    setRegistrySaveError(null);
+    saveCustomerRegistry({
+      customers: registry.customers.map((c) => ({
+        id: c.id,
+        name: c.name,
+        is_internal: c.is_internal,
+      })),
+      environments: registry.overrides,
+    })
+      .then((saved) => {
+        // Adopt what the server ended up with rather than the draft - it is
+        // the one that knows which customers already existed.
+        setRegistry(saved);
+        setSavedRegistry(saved);
+      })
+      .catch((err) => {
+        if (err instanceof UnauthorizedError) onLogout();
+        // 409 is the expected, actionable one (a customer name already in
+        // use), so don't bury it under a generic "is the API running?".
+        else
+          setRegistrySaveError(
+            err instanceof ConflictError
+              ? err.message
+              : "Could not save the mapping — is the API running?",
+          );
+      })
+      .finally(() => setSavingRegistry(false));
+  }
 
   // The CSV wants the flat (user, environment, day) rows, which no longer
   // arrive on page load - the server builds the file when the button is
@@ -423,6 +651,13 @@ export default function Dashboard({
       <FilterBar
         preset={preset}
         onPresetChange={applyPreset}
+        groupBy={groupBy}
+        onGroupByChange={setGroupBy}
+        groupByCustomerDisabledReason={
+          registryLoadError
+            ? "The customer registry could not be loaded, so every environment would show as Unassigned."
+            : undefined
+        }
         range={range}
         onRangeChange={setRange}
         userEmails={userEmails}
@@ -433,9 +668,13 @@ export default function Dashboard({
         environment={environment}
         onEnvironmentChange={setEnvironment}
         environmentCounts={optionCounts.envs}
+        environmentCustomer={
+          registryReady ? (e) => resolve(e).name : undefined
+        }
         onReset={() => {
           setUser([]);
           setEnvironment([]);
+          setGroupBy(DEFAULT_GROUP_BY);
           applyPreset(DEFAULT_PRESET);
         }}
         onExport={exportSlice}
@@ -446,6 +685,12 @@ export default function Dashboard({
           skeleton flash, no layout jump. */}
       <main className={`wrap${loading ? " loading-dim" : ""}`}>
         {error && <div className="card banner-error">{error}</div>}
+        {/* Without this the failure is completely silent: the mapping tab
+            just isn't there, and Group by → Customer would fold every
+            environment into one "Unassigned" bar that reads as a finding. */}
+        {registryLoadError && (
+          <div className="card banner-error">{registryLoadError}</div>
+        )}
 
         <div className="sec-title">
           <h2>Adoption at a glance</h2>
@@ -522,16 +767,16 @@ export default function Dashboard({
           <section className="card">
             <div className="card-hd">
               <div>
-                <h2>By environment</h2>
+                <h2>By {dimensionLabel}</h2>
                 <p className="sub">
-                  {environmentRank.length} environment
-                  {environmentRank.length === 1 ? "" : "s"} in scope
+                  {dimensionRank.length} {dimensionLabel}
+                  {dimensionRank.length === 1 ? "" : "s"} in scope
                 </p>
               </div>
             </div>
             <div className="card-bd">
               <RankedBars
-                entries={environmentRank}
+                entries={dimensionRank}
                 series={series}
                 onTip={setTip}
               />
@@ -546,7 +791,7 @@ export default function Dashboard({
           </p>
         </div>
         <div className="two-up">
-          <HeatmapCard cells={heatCells} />
+          <HeatmapCard cells={heatCells} columnLabel={dimensionLabel} />
           <section className="card">
             <div className="card-hd">
               <div>
@@ -573,6 +818,101 @@ export default function Dashboard({
         </div>
 
         <div className="sec-title">
+          <h2>What each {dimensionLabel} uses TestEase for</h2>
+          <p>
+            Adoption is not one number — {groupBy === "customer" ? "a" : "an"}{" "}
+            {dimensionLabel} that only generates documents is using a quarter
+            of the product.
+          </p>
+        </div>
+        <div className="two-up wide top">
+          <section className="card">
+            <div className="card-hd">
+              <div>
+                <h2>
+                  {groupBy === "customer" ? "Customer" : "Environment"} ×
+                  feature
+                </h2>
+                <p className="sub">
+                  {featureMode === "share"
+                    ? "Each row sums to 100% — the shape of usage, not its size."
+                    : "Actions per feature. Breadth counts how many of the four are used at all."}
+                </p>
+              </div>
+              <div className="seg" role="group" aria-label="Heatmap mode">
+                {(
+                  [
+                    { id: "count", label: "Actions" },
+                    { id: "share", label: `% of ${dimensionLabel}` },
+                  ] as const
+                ).map((option) => (
+                  <button
+                    key={option.id}
+                    aria-pressed={featureMode === option.id}
+                    onClick={() => setFeatureMode(option.id)}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="card-bd heat-scroll">
+              <FeatureHeatmap
+                rows={byDimension}
+                series={series}
+                mode={featureMode}
+              />
+            </div>
+          </section>
+          <section className="card">
+            <div className="card-hd">
+              <div>
+                <h2>Outcome measures</h2>
+                <p className="sub">
+                  Ratios, not volumes — each with the level worth holding it
+                  to.
+                </p>
+              </div>
+            </div>
+            <div className="card-bd">
+              <OutcomeMeters
+                created={summary?.test_cases_created ?? 0}
+                executed={summary?.test_cases_executed ?? 0}
+                testCaseDocuments={
+                  summary?.test_case_documents_generated ?? 0
+                }
+                dimensions={byDimension}
+                series={series}
+                activeDays={activeDays}
+                windowDays={windowDays}
+                dimensionLabel={dimensionLabel}
+              />
+            </div>
+          </section>
+        </div>
+
+        <div className="sec-title">
+          <h2>Market coverage</h2>
+          <p>
+            Which markets&rsquo; integrations are actually being tested, read
+            from the country prefix in each interface name.
+          </p>
+        </div>
+        <section className="card">
+          <div className="card-hd">
+            <div>
+              <h2>Tested markets</h2>
+              <p className="sub">
+                Same date, user and environment scope as everything above.
+              </p>
+            </div>
+          </div>
+          <div className="card-bd">
+            <MarketCoverage artifacts={artifacts} series={series} />
+          </div>
+        </section>
+
+        <div className="sec-title">
           <h2>Detail records</h2>
           <p>
             The raw tables, demoted to where you go when you need to prove a
@@ -585,6 +925,26 @@ export default function Dashboard({
           environment={environment}
           userRollup={userRollup}
           artifactRows={artifacts}
+          mapping={
+            registryReady
+              ? {
+                  registry,
+                  resolve,
+                  environments: environmentIds,
+                  totals: environmentTotals,
+                  handlers: {
+                    onOverride: setOverride,
+                    onAddCustomer: addCustomer,
+                    onRevertAll: () =>
+                      setRegistry((r) => ({ ...r, overrides: [] })),
+                    onSave: saveRegistry,
+                    saving: savingRegistry,
+                    dirty: !sameRegistry(registry, savedRegistry),
+                    error: registrySaveError,
+                  },
+                }
+              : undefined
+          }
         />
       </main>
       <Tip tip={tip} series={series} />
