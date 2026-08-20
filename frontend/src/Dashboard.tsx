@@ -28,8 +28,6 @@ import FilterBar, {
   type GroupBy,
   type Preset,
 } from "./components/FilterBar";
-import MarketCoverage from "./components/MarketCoverage";
-import OutcomeMeters from "./components/OutcomeMeters";
 import { type HeatCell } from "./components/Heatmap";
 import HeatmapCard from "./components/HeatmapCard";
 import Hero from "./components/Hero";
@@ -825,90 +823,37 @@ export default function Dashboard({
             of the product.
           </p>
         </div>
-        <div className="two-up wide top">
-          <section className="card">
-            <div className="card-hd">
-              <div>
-                <h2>
-                  {groupBy === "customer" ? "Customer" : "Environment"} ×
-                  feature
-                </h2>
-                <p className="sub">
-                  {featureMode === "share"
-                    ? "Each row sums to 100% — the shape of usage, not its size."
-                    : "Actions per feature. Breadth counts how many of the four are used at all."}
-                </p>
-              </div>
-              <div className="seg" role="group" aria-label="Heatmap mode">
-                {(
-                  [
-                    { id: "count", label: "Actions" },
-                    { id: "share", label: `% of ${dimensionLabel}` },
-                  ] as const
-                ).map((option) => (
-                  <button
-                    key={option.id}
-                    aria-pressed={featureMode === option.id}
-                    onClick={() => setFeatureMode(option.id)}
-                  >
-                    {option.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-            <div className="card-bd heat-scroll">
-              <FeatureHeatmap
-                rows={byDimension}
-                series={series}
-                mode={featureMode}
-              />
-            </div>
-          </section>
-          <section className="card">
-            <div className="card-hd">
-              <div>
-                <h2>Outcome measures</h2>
-                <p className="sub">
-                  Ratios, not volumes — each with the level worth holding it
-                  to.
-                </p>
-              </div>
-            </div>
-            <div className="card-bd">
-              <OutcomeMeters
-                created={summary?.test_cases_created ?? 0}
-                executed={summary?.test_cases_executed ?? 0}
-                testCaseDocuments={
-                  summary?.test_case_documents_generated ?? 0
-                }
-                dimensions={byDimension}
-                series={series}
-                activeDays={activeDays}
-                windowDays={windowDays}
-                dimensionLabel={dimensionLabel}
-              />
-            </div>
-          </section>
-        </div>
-
-        <div className="sec-title">
-          <h2>Market coverage</h2>
-          <p>
-            Which markets&rsquo; integrations are actually being tested, read
-            from the country prefix in each interface name.
-          </p>
-        </div>
         <section className="card">
           <div className="card-hd">
             <div>
-              <h2>Tested markets</h2>
+              <h2>
+                {groupBy === "customer" ? "Customer" : "Environment"} × feature
+              </h2>
               <p className="sub">
-                Same date, user and environment scope as everything above.
+                {featureMode === "share"
+                  ? "Each row sums to 100% — the shape of usage, not its size."
+                  : "Actions per feature. Breadth counts how many of the four are used at all."}
               </p>
             </div>
+            <div className="seg" role="group" aria-label="Heatmap mode">
+              {(
+                [
+                  { id: "count", label: "Actions" },
+                  { id: "share", label: `% of ${dimensionLabel}` },
+                ] as const
+              ).map((option) => (
+                <button
+                  key={option.id}
+                  aria-pressed={featureMode === option.id}
+                  onClick={() => setFeatureMode(option.id)}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
           </div>
-          <div className="card-bd">
-            <MarketCoverage artifacts={artifacts} series={series} />
+          <div className="card-bd heat-scroll">
+            <FeatureHeatmap rows={byDimension} series={series} mode={featureMode} />
           </div>
         </section>
 

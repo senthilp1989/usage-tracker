@@ -1946,20 +1946,10 @@ table.data tbody tr:hover {
   white-space: nowrap;
 }
 
-/* ── customer model: feature grid, meters, market map, mapping tab ─────
+/* ── customer model: feature grid, mapping tab ─────────────────────────
    Added alongside the existing panels, not in place of them: the customer
    axis is a rollup on top of the environment axis, so everything above keeps
    working unchanged when Group by is left on Environment. */
-
-/* The feature grid needs more width than the meters beside it, so the wide
-   variant gives the data grid the room and leaves the narrower panel narrow. */
-.two-up.wide {
-  grid-template-columns: 1.55fr 1fr;
-}
-
-.two-up.top {
-  align-items: start;
-}
 
 /* Feature columns are labelled with the metric name and its colour dot, so
    they wrap rather than rotate the way the environment axis does. */
@@ -2030,200 +2020,6 @@ table.data tbody tr:hover {
 
 .popgrp button:hover {
   text-decoration: underline;
-}
-
-/* ── outcome meters ─────────────────────────────────────── */
-.meters {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
-
-.meter .m-top {
-  display: flex;
-  align-items: baseline;
-  gap: 10px;
-  margin-bottom: 7px;
-}
-
-.meter .m-label {
-  font-size: 12.5px;
-  color: var(--ink-2);
-  font-weight: 500;
-}
-
-.meter .m-val {
-  margin-left: auto;
-  font-size: 20px;
-  font-weight: 600;
-  letter-spacing: -0.02em;
-  line-height: 1;
-}
-
-.meter .m-track {
-  position: relative;
-  height: 9px;
-  border-radius: 5px;
-  background: var(--surface-3);
-}
-
-.meter .m-fill {
-  position: absolute;
-  inset: 0 auto 0 0;
-  border-radius: 5px;
-  transition: width 0.4s ease;
-}
-
-/* The target tick overhangs the track on both edges so it reads as a
-   threshold marker rather than as part of the fill. */
-.meter .m-target {
-  position: absolute;
-  top: -4px;
-  width: 2px;
-  height: 17px;
-  background: var(--ink);
-  border-radius: 1px;
-}
-
-.meter .m-foot {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  margin-top: 8px;
-  font-size: 11.5px;
-  color: var(--muted);
-}
-
-.meter .m-foot .verdict {
-  font-weight: 600;
-  white-space: nowrap;
-}
-
-.meter .m-foot .verdict.ok {
-  color: var(--good-text);
-}
-
-.meter .m-foot .verdict.no {
-  color: var(--critical-text);
-}
-
-/* ── tile-grid market map ───────────────────────────────── */
-.market-sub {
-  margin: 0 0 14px;
-}
-
-.tilewrap {
-  display: flex;
-  gap: 22px;
-  flex-wrap: wrap;
-  align-items: flex-start;
-  overflow-x: auto;
-  padding-bottom: 4px;
-}
-
-.tilemap {
-  display: grid;
-  grid-template-columns: repeat(10, 46px);
-  grid-template-rows: repeat(4, 46px);
-  gap: 4px;
-  flex: none;
-}
-
-.tile {
-  border-radius: 7px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 1px;
-  font-size: 11px;
-  cursor: default;
-  border: 1px solid var(--line);
-}
-
-.tile.blank {
-  background: transparent;
-  border-color: transparent;
-}
-
-.tile .cc {
-  font-weight: 700;
-  letter-spacing: 0.02em;
-}
-
-.tile .n {
-  font-size: 12px;
-  font-weight: 700;
-  font-variant-numeric: tabular-nums;
-}
-
-.offmap {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  min-width: 190px;
-  flex: 1;
-}
-
-.offmap .offrow {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 9px 11px;
-  border-radius: 9px;
-  background: var(--surface-2);
-  border: 1px solid var(--line);
-}
-
-.offmap .offrow.busiest {
-  background: var(--accent-wash);
-  border-color: transparent;
-}
-
-.offmap .offrow.note-row {
-  border-style: dashed;
-  border-color: var(--line-strong);
-  align-items: flex-start;
-}
-
-.offmap .offrow .cc {
-  font-weight: 700;
-  font-size: 11.5px;
-  min-width: 34px;
-}
-
-.offmap .offrow .lb {
-  font-size: 11.5px;
-  color: var(--muted);
-  flex: 1;
-  line-height: 1.35;
-}
-
-.offmap .offrow .n {
-  font-weight: 700;
-  font-variant-numeric: tabular-nums;
-  font-size: 13px;
-}
-
-.scale {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-top: 14px;
-  font-size: 11px;
-  color: var(--muted);
-}
-
-.scale .ramp {
-  display: flex;
-  gap: 2px;
-}
-
-.scale .ramp i {
-  width: 22px;
-  height: 9px;
-  border-radius: 2px;
-  display: block;
 }
 
 /* ── admin: customer mapping tab ────────────────────────── */
@@ -2409,8 +2205,7 @@ select.custsel.changed {
   .kpi-row {
     grid-template-rows: auto auto;
   }
-  .two-up,
-  .two-up.wide {
+  .two-up {
     grid-template-columns: 1fr;
   }
 }
